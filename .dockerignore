@@ -1,0 +1,13 @@
+# Build context is the repo root; keep it minimal so builds stay fast.
+.git
+node_modules
+dist
+dist-electron
+release
+data
+models
+REFERENCE
+**/*.log
+.DS_Store
+.vscode
+.idea

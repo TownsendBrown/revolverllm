@@ -1,0 +1,58 @@
+# Revolver — frontend + backend + llama-server
+# Usage: docker compose up --build
+# GPU:   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    # Control plane: bind to loopback only. The frontend reaches it over the
+    # compose network; it is not meant to be a remote surface (model containers are).
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-3001}:3001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${MODELS_DIR:-./models}:/models
+      - revolver-data:/app/data
+      - llama-config:/llama-config
+    environment:
+      REVOLVER_ROOT: /app
+      REVOLVER_DOCKER: "1"
+      REVOLVER_MODELS_DIR: /models
+      REVOLVER_HUB_MODELS_DIR: /models/hub
+      REVOLVER_LOCAL_ROOT: /models/.revolver
+      # Host path that backs /models — used as the bind-mount source when the
+      # backend spawns per-server llama.cpp containers on the host daemon.
+      # MUST be an absolute host path (relative paths won't resolve).
+      REVOLVER_HOST_MODELS_DIR: ${MODELS_DIR:-./models}
+      LLAMA_CONFIG_DIR: /llama-config
+      # Named volume the backend shares with spawned containers (mounted by name
+      # on the host daemon, since the backend's /llama-config path is not visible there).
+      LLAMA_CONFIG_VOLUME: revolver_llama-config
+      LLAMA_CONNECT_HOST: host.docker.internal
+      PORT: "3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  revolver-data:
+  llama-config:

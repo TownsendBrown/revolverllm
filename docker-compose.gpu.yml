@@ -1,0 +1,19 @@
+# NVIDIA GPU overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+
+services:
+  backend:
+    gpus: all
+    environment:
+      LLAMA_GPU: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      # Host driver binary; libnvidia-ml injected by NVIDIA Container Toolkit
+      - ${NVIDIA_SMI_HOST_PATH:-/usr/bin/nvidia-smi}:/usr/bin/nvidia-smi:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

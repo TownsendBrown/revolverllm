@@ -1,0 +1,5 @@
+{
+  "modelsDir": "/models",
+  "hubModelsDir": "/models/hub",
+  "localRoot": "/models/.revolver"
+}

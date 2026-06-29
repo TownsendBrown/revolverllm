@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+release/
+data/
+!data/.gitkeep
+*.pyc
+.env
+config.local.json
+models/
