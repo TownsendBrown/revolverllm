@@ -18,7 +18,7 @@ import type {
   ServerInstanceStatus,
   ServersOverview,
 } from "../shared/types";
-import { removeServerContainer } from "./containerUtils";
+import { removeServerRuntime } from "./serverRuntime";
 import { InstanceRuntime } from "./instanceRuntime";
 
 const runtimes = new Map<string, InstanceRuntime>();
@@ -41,7 +41,7 @@ function runtimeFor(id: string): InstanceRuntime | null {
 }
 
 function defaultGpuDevices(backend: InferenceBackend, devices: number[]): number[] {
-  if (backend === "cpu") return [];
+  if (backend === "cpu" || backend === "metal") return [];
   return devices;
 }
 
@@ -134,12 +134,13 @@ export const serverManager = {
   },
 
   async deleteServer(serverId: string): Promise<void> {
+    const def = getServerDefinition(serverId);
     const rt = runtimeFor(serverId);
     if (rt) {
       await rt.unload();
       runtimes.delete(serverId);
     }
-    await removeServerContainer(serverId);
+    if (def) await removeServerRuntime(def);
     removeServerDefinition(serverId);
   },
 
@@ -159,6 +160,12 @@ export const serverManager = {
     if (serverId) return runtimeFor(serverId)?.loaded ?? null;
     const running = this.listStatuses().find((s) => s.running);
     return running?.loaded ?? null;
+  },
+
+  async ensureReady(serverId: string): Promise<void> {
+    const rt = runtimeFor(serverId);
+    if (!rt) throw new Error("Server not found");
+    await rt.ensureReady();
   },
 
   inferTarget(

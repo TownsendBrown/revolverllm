@@ -6,6 +6,7 @@ const api: RevolverApi = {
   getConfig: () => ipcRenderer.invoke("revolver:getConfig"),
   setConfig: (patch) => ipcRenderer.invoke("revolver:setConfig", patch),
   getGpu: () => ipcRenderer.invoke("revolver:getGpu"),
+  getPlatform: () => ipcRenderer.invoke("revolver:getPlatform"),
   getMonitor: () => ipcRenderer.invoke("revolver:getMonitor"),
   getModels: () => ipcRenderer.invoke("revolver:getModels"),
   estimateVram: (opts) => ipcRenderer.invoke("revolver:estimateVram", opts),

@@ -38,8 +38,8 @@ services:
       # MUST be an absolute host path (relative paths won't resolve).
       REVOLVER_HOST_MODELS_DIR: ${MODELS_DIR:-./models}
       LLAMA_CONFIG_DIR: /llama-config
-      # Named volume the backend shares with spawned containers (mounted by name
-      # on the host daemon, since the backend's /llama-config path is not visible there).
+      # Fallback when mountinfo resolution is unavailable; compose project name
+      # may differ, so spawned containers derive the host path from this mount.
       LLAMA_CONFIG_VOLUME: revolver_llama-config
       LLAMA_CONNECT_HOST: host.docker.internal
       PORT: "3001"

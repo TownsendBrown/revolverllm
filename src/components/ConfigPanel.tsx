@@ -39,7 +39,7 @@ export default function ConfigPanel({
       <section className="panel">
         <h3>GPUs</h3>
         {!gpu?.available && (
-          <p className="muted">{gpu?.error ? `No GPU: ${gpu.error}` : "No NVIDIA GPU detected"}</p>
+          <p className="muted">{gpu?.error ? `No GPU: ${gpu.error}` : "No GPU detected"}</p>
         )}
         {gpu?.available && (
           <>

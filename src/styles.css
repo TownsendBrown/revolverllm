@@ -26,14 +26,30 @@ body { margin: 0; }
   gap: 4px;
 }
 
-.brand {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #7d8599;
-  margin-bottom: 12px;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
+.brand-logo {
+  width: 64px;
+  height: 56px;
+  overflow: hidden;
+  position: relative;
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+
+.brand-logo-art {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace;
+  font-size: 5px;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: pre;
+  color: #e2e6ef;
+  user-select: none;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.205);
+  transform-origin: center center;
 }
 
 .nav-btn {

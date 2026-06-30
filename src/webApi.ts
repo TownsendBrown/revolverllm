@@ -152,6 +152,7 @@ export function createWebApi(base = "/api"): RevolverApi {
     getConfig: () => get(p("/config")),
     setConfig: (patch) => post(p("/config"), patch),
     getGpu: () => get(p("/gpu")),
+    getPlatform: () => get(p("/platform")),
     getMonitor: () => get(p("/monitor")),
     getModels: () => get(p("/models")),
     estimateVram: (opts) => post(p("/vram/estimate"), opts),

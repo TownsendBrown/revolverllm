@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import LoadProgressBar from "./LoadProgressBar";
 import {
   api,
@@ -28,12 +28,25 @@ type Props = {
 type View = "list" | "wizard" | "detail";
 type WizardStep = "backend" | "gpu" | "model" | "config" | "review";
 
+const DOCKER_GPU_BACKENDS = new Set<InferenceBackend>(["cuda", "rocm", "vulkan"]);
+
 const BACKENDS: { id: InferenceBackend; label: string; hint: string }[] = [
+  { id: "metal", label: "Metal (macOS)", hint: "Apple Silicon GPU via native llama-server" },
   { id: "cuda", label: "CUDA", hint: "NVIDIA GPUs via llama.cpp CUDA backend" },
   { id: "rocm", label: "ROCm", hint: "AMD GPUs (ROCm image)" },
   { id: "vulkan", label: "Vulkan", hint: "Cross-vendor GPU via Vulkan" },
   { id: "cpu", label: "CPU", hint: "No GPU — runs on host CPU only" },
 ];
+
+function availableBackends(macMetal: boolean) {
+  if (!macMetal) return BACKENDS;
+  return BACKENDS.filter((b) => !DOCKER_GPU_BACKENDS.has(b.id));
+}
+
+function defaultWizardBackend(macMetal: boolean, gpuAvailable: boolean): InferenceBackend {
+  if (macMetal) return "metal";
+  return gpuAvailable ? "cuda" : "cpu";
+}
 
 const phaseLabel: Record<string, string> = {
   idle: "Idle",
@@ -83,6 +96,7 @@ export default function ServerPanel({
   const [detailStatus, setDetailStatus] = useState<ServerInstanceStatus | null>(null);
 
   const [backend, setBackend] = useState<InferenceBackend>("cuda");
+  const [macMetal, setMacMetal] = useState(false);
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
   const [selectedModel, setSelectedModel] = useState("");
@@ -98,6 +112,8 @@ export default function ServerPanel({
   const logRef = useRef<HTMLPreElement>(null);
   const serverLogRef = useRef<HTMLPreElement>(null);
 
+  const wizardBackends = useMemo(() => availableBackends(macMetal), [macMetal]);
+
   const refreshServers = useCallback(async () => {
     const list = await api.listServers();
     setServers(list);
@@ -106,8 +122,14 @@ export default function ServerPanel({
 
   useEffect(() => {
     refreshServers().catch((e) => onError(String(e)));
+    api.getPlatform().then((p) => setMacMetal(p.macMetal)).catch(() => {});
     api.getServerConfig().then(setServerDraft);
   }, [configVersion, refreshServers, onError]);
+
+  useEffect(() => {
+    if (!macMetal || !DOCKER_GPU_BACKENDS.has(backend)) return;
+    setBackend("metal");
+  }, [macMetal, backend]);
 
   useEffect(() => {
     api.getRuntimeConfig().then((rt) => {
@@ -171,7 +193,7 @@ export default function ServerPanel({
 
   const resetWizard = () => {
     setWizardStep("backend");
-    setBackend(gpu?.available ? "cuda" : "cpu");
+    setBackend(defaultWizardBackend(macMetal, gpu?.available ?? false));
     setGpuDevices(gpu?.devices[0] != null ? [gpu.devices[0].index] : []);
     setGpuMode("single");
     setSelectedModel("");
@@ -195,12 +217,14 @@ export default function ServerPanel({
   };
 
   const wizardSteps: WizardStep[] =
-    backend === "cpu" ? ["backend", "model", "config", "review"] : ["backend", "gpu", "model", "config", "review"];
+    backend === "cpu" || backend === "metal"
+      ? ["backend", "model", "config", "review"]
+      : ["backend", "gpu", "model", "config", "review"];
 
   const stepIndex = wizardSteps.indexOf(wizardStep);
   const canNext = () => {
     if (wizardStep === "backend") return true;
-    if (wizardStep === "gpu") return backend === "cpu" || gpuDevices.length > 0;
+    if (wizardStep === "gpu") return backend === "cpu" || backend === "metal" || gpuDevices.length > 0;
     if (wizardStep === "model") return selectedModel && selectedHasWeights;
     if (wizardStep === "config") return true;
     return true;
@@ -240,7 +264,7 @@ export default function ServerPanel({
       const req: CreateServerRequest = {
         name: serverName.trim() || undefined,
         backend,
-        gpuDevices: backend === "cpu" ? [] : gpuDevices,
+        gpuDevices: backend === "cpu" || backend === "metal" ? [] : gpuDevices,
         gpuMode: gpuDevices.length >= 2 ? gpuMode : "single",
         modelId: selectedModel,
         contextLength,
@@ -302,7 +326,7 @@ export default function ServerPanel({
             <div className="wizard-body">
               <p className="muted">Pick inference backend for this container.</p>
               <div className="backend-grid">
-                {BACKENDS.map((b) => (
+                {wizardBackends.map((b) => (
                   <button
                     key={b.id}
                     className={`backend-card ${backend === b.id ? "sel" : ""}`}

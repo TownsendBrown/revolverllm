@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import ConfigPanel from "./components/ConfigPanel";
 import ChatPanel from "./components/ChatPanel";
+import Logo from "./components/Logo";
 import MonitorPanel from "./components/MonitorPanel";
 import ServerPanel from "./components/ServerPanel";
 import {
@@ -97,7 +98,7 @@ export default function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand">Revolver</div>
+        <Logo />
         {nav.map((n) => (
           <button
             key={n.id}

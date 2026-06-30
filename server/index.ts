@@ -16,6 +16,7 @@ const routes: Array<{ method: "get" | "post"; path: string; name: HandlerName }>
   { method: "get", path: "/api/config", name: "getConfig" },
   { method: "post", path: "/api/config", name: "setConfig" },
   { method: "get", path: "/api/gpu", name: "getGpu" },
+  { method: "get", path: "/api/platform", name: "getPlatform" },
   { method: "get", path: "/api/monitor", name: "getMonitor" },
   { method: "get", path: "/api/models", name: "getModels" },
   { method: "post", path: "/api/vram/estimate", name: "estimateVram" },

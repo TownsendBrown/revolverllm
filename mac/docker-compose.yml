@@ -1,0 +1,25 @@
+# Mac Metal stack — containerized manager + host llama-server
+# 1. Start host agent on macOS (see README)
+# 2. docker compose up
+
+services:
+  manager:
+    build:
+      context: ./manager
+      dockerfile: Dockerfile
+    ports:
+      - "${MANAGER_PORT:-3099}:3099"
+    volumes:
+      - ${MODELS_DIR:-../models}:/models
+      - ./data/llama-config:/config
+      - ./data/revolver-llama.sock:/var/run/revolver-llama.sock
+    environment:
+      PORT: "3099"
+      LLAMA_CONFIG_DIR: /config
+      REVOLVER_MODELS_DIR: /models
+      REVOLVER_HOST_MODELS_DIR: ${MODELS_DIR:-../models}
+      REVOLVER_LLAMA_SOCKET: /var/run/revolver-llama.sock
+      LLAMA_CONNECT_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -1,7 +1,6 @@
 import { existsSync, statSync } from "fs";
 import { clampContextLength, modelMaxContext } from "../electron/lib/contextLength";
-import { getGpuInfo } from "../electron/lib/gpu";
-import { getMonitorSnapshot } from "../electron/lib/monitor";
+import { getGpuInfoAsync, getMonitorSnapshotAsync } from "./platformGpu";
 import {
   getCatalog,
   normalizeGgufMeta,
@@ -15,18 +14,13 @@ import { loadServerConfig, saveServerConfig } from "../electron/lib/serverConfig
 import { estimateVram, evaluateGuardrails, effectiveGpuLayers } from "../electron/lib/vram";
 import * as chatService from "../electron/lib/chatService";
 import { inferChatStream } from "../electron/lib/chatInfer";
-import type { CreateServerRequest, GuardrailResult, VramEstimate } from "../electron/lib/types";
+import type { CreateServerRequest, GpuInfo, GuardrailResult, VramEstimate } from "../electron/lib/types";
+import { metalEnabled } from "./hostAgent";
 import { serverManager } from "./serverManager";
 
-type GpuDevices = ReturnType<typeof getGpuInfo>["devices"];
+type GpuDevices = GpuInfo["devices"];
 
-/**
- * Restrict the GPU device list to the indices the server will actually use.
- * Estimating against all host GPUs over-reports capacity/free VRAM — e.g. a
- * model pinned to a single 16 GB P100 would be checked against the summed VRAM
- * of every GPU. Falls back to all devices when no selection is given.
- */
-function selectedDevices(gpu: ReturnType<typeof getGpuInfo>, gpuDevices?: number[]): GpuDevices {
+function selectedDevices(gpu: GpuInfo, gpuDevices?: number[]): GpuDevices {
   if (!gpu.available || gpu.devices.length === 0) return [];
   if (!gpuDevices || gpuDevices.length === 0) return gpu.devices;
   const sel = gpu.devices.filter((d) => gpuDevices.includes(d.index));
@@ -76,7 +70,7 @@ export async function computeEstimate(opts: {
     modelMaxContext(yamlCtx) ??
     (Number(meta.context_length ?? meta.contextLength ?? 0) || null);
   const ctx = clampContextLength(opts.contextLength, modelMax);
-  const gpu = getGpuInfo();
+  const gpu = await getGpuInfoAsync();
   const devices = selectedDevices(gpu, opts.gpuDevices);
   const deviceCount = opts.gpuDeviceCount ?? (devices.length || null);
   const scopedFree = devices.length ? devices.reduce((s, d) => s + d.freeBytes, 0) : null;
@@ -146,9 +140,12 @@ async function prepareLoadRequest(opts: LoadRequestOpts) {
 
 async function ensureModelForRequest(serverId?: string | null) {
   if (serverId) {
-    const st = serverManager.getStatus(serverId);
-    if (st?.running) return;
-  } else if (serverManager.overview().running) {
+    await serverManager.ensureReady(serverId);
+    return;
+  }
+  const running = serverManager.listStatuses().find((s) => s.running);
+  if (running) {
+    await serverManager.ensureReady(running.definition.id);
     return;
   }
 
@@ -189,8 +186,9 @@ export const handlers = {
       localRoot: patch.localRoot ?? current.localRoot,
     });
   },
-  getGpu: () => getGpuInfo(),
-  getMonitor: () => getMonitorSnapshot(),
+  getGpu: () => getGpuInfoAsync(),
+  getPlatform: () => ({ macMetal: metalEnabled() }),
+  getMonitor: () => getMonitorSnapshotAsync(),
   getModels: () => getCatalog(loadedModelIds()),
   listServers: () => serverManager.listStatuses(),
   getServerConfig: () => loadServerConfig(),
@@ -199,11 +197,19 @@ export const handlers = {
   setRuntimeConfig: (patch: Parameters<typeof saveRuntimeConfig>[0]) => saveRuntimeConfig(patch),
   getServerStatus: async (serverId?: string) => {
     if (serverId) {
-      await serverManager.refreshServerLogs(serverId);
       const st = serverManager.getStatus(serverId);
       if (!st) throw new Error("Server not found");
+      // Don't block UI polling on host-agent while restart is in flight.
+      if (st.loadPhase !== "loading") {
+        try {
+          await serverManager.refreshServerLogs(serverId);
+        } catch {
+          /* host agent busy or unreachable */
+        }
+      }
+      const latest = serverManager.getStatus(serverId)!;
       return {
-        ...st,
+        ...latest,
         jit: { enabled: false, autoEvict: false, ttlSeconds: 0 },
         ttlExpiresAt: null,
         servers: serverManager.listStatuses(),

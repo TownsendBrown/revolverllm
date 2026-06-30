@@ -171,7 +171,7 @@ export default function MonitorPanel() {
         <h3>GPU</h3>
         {!gpu?.available && (
           <p className="muted">
-            {gpu?.error ? `No GPU data: ${gpu.error}` : "No NVIDIA GPU detected (nvidia-smi required)"}
+            {gpu?.error ? `No GPU data: ${gpu.error}` : "No GPU detected"}
           </p>
         )}
         {gpu?.available && (

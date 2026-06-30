@@ -1,0 +1,17 @@
+# Mac Metal overlay — native llama-server on host via host-agent
+# Usage: npm run docker:up:mac
+# Host agent listens on host TCP :9742 (reliable through Docker Desktop).
+
+services:
+  backend:
+    volumes: !override
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${MODELS_DIR:-./models}:/models
+      - revolver-data:/app/data
+      - ${REVOLVER_LLAMA_CONFIG_HOST:-./data/llama-config}:/llama-config
+    environment:
+      REVOLVER_LLAMA_HOST: host.docker.internal
+      REVOLVER_LLAMA_PORT: "9742"
+      LLAMA_CONFIG_HOST_DIR: ${REVOLVER_LLAMA_CONFIG_HOST:-./data/llama-config}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

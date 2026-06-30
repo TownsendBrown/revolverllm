@@ -1,3 +1,27 @@
+```text
+            W@$$$$$$$$$$$$@_
+         uB`                f&'
+      IB)  p0fY*`      xhrnW- .*z
+     )u  /"     .O   .J      %   B
+    {z   8       h   L       ;~  .B
+   _Y    o       B   [i      Y'   .%       .----------------.  .----------------.  .----------------.  .----------------.  .----------------.  .----------------.  .----------------.  .----------------.
+  -X      Ct.  -d     lo'  ,%.      B      | .--------------. || .--------------. || .--------------. || .--------------. || .--------------. || .--------------. || .--------------. || .--------------. |
+ ]u                                  $      | |  _______     | || |  _________   | || | ____   ____  | || |     ____     | || |   _____      | || | ____   ____  | || |  _________   | || |  _______     | |
+]n  >%j(Wx                   'MX{hO   @      | | |_   __ \    | || | |_   ___  |  | || ||_  _| |_  _| | || |   .'    `.   | || |  |_   _|     | || ||_  _| |_  _| | || | |_   ___  |  | || | |_   __ \    | |
+m. B      b                 w.     )< k      | |   | |__) |   | || |   | |_  \_|  | || |  \ \   / /   | || |  /  .--.  \  | || |    | |       | || |  \ \   / /   | || |   | |_  \_|  | || |   | |__) |   | |
+m.-^       h               'u       & k      | |   |  __ /    | || |   |  _|  _   | || |   \ \ / /    | || |  | |    | |  | || |    | |   _   | || |   \ \ / /    | || |   |  _|  _   | || |   |  __ /    | |
+m..c      "I                o       C k      | |  _| |  \ \_  | || |  _| |___/ |  | || |    \ ' /     | || |  \  `--'  /  | || |   _| |__/ |  | || |    \ ' /     | || |  _| |___/ |  | || |  _| |  \ \_  | |
+O^  %`   k:                  ai   Yt  a      | | |____| |___| | || | |_________|  | || |     \_/      | || |   `.____.'   | || |  |________|  | || |     \_/      | || | |_________|  | || | |____| |___| | |
+ M'                                  w;      | |              | || |              | || |              | || |              | || |              | || |              | || |              | || |              | |
+  W.       Mo-O&       u@}f@[       mI      | '--------------' || '--------------' || '--------------' || '--------------' || '--------------' || '--------------' || '--------------' || '--------------' |
+   %     x:     'O   .J      &     wI       '----------------'  '----------------'  '----------------'  '----------------'  '----------------'  '----------------'  '----------------'  '----------------'
+    B    &       a   L       :~   qI
+     B.  *       B   1l      X'  b,
+      dw  vc   )q     Io   `%. :@"
+        :B{                 .hY
+           u8}}}}}}}}}}}}}/8'
+```
+
 # Revolver
 
 Revolver is a local model manager for **GGUF** files. Point it at a models directory, pick a checkpoint, and it starts a **llama.cpp** inference server for you — no manual `docker run` or CLI flags to remember.
@@ -31,12 +55,12 @@ In both modes, models stay on disk (bind-mounted into containers); Revolver only
            │ docker CLI
   ┌────────▼────────────────────────────────────────┐
   │  host Docker daemon                             │
-  │  ┌──────────────────┐  ┌──────────────────┐   │
-  │  │ revolver-server- │  │ revolver-server- │   │
-  │  │ <id>  (CUDA/CPU) │  │ <id>  …          │   │
-  │  │  llama.cpp       │  │  llama.cpp       │   │
-  │  └────────┬─────────┘  └────────┬─────────┘   │
-  └───────────┼─────────────────────┼─────────────┘
+  │  ┌──────────────────┐  ┌──────────────────┐     │
+  │  │ revolver-server- │  │ revolver-server- │     │
+  │  │ <id>  (CUDA/CPU) │  │ <id>  …          │     │
+  │  │  llama.cpp       │  │  llama.cpp       │     │
+  │  └────────┬─────────┘  └────────┬─────────┘     │
+  └───────────┼─────────────────────┼───────────────┘
               │                     │
          ~/.revolver/models    GGUF files on disk
 ```
@@ -207,6 +231,21 @@ npm run docker:up:gpu
 # or: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 ```
 
+**3b. Metal (macOS Apple Silicon)**
+
+Native `llama-server` on the Mac host (Metal GPU). One command starts host agent + compose:
+
+```bash
+brew install llama.cpp
+npm run docker:up:mac
+```
+
+Host agent starts in background automatically (`data/revolver-host-agent.log`). Debug foreground: `npm run host-agent`. Stop agent: `npm run host-agent:stop`.
+
+In the Revolver UI, create a server with backend **Metal (macOS)**.
+
+See [mac/README.md](mac/README.md) for details.
+
 ```
   docker compose up
         │
@@ -258,6 +297,9 @@ docker compose down
 | `npm run server` | Standalone Express backend |
 | `npm run docker:up` | Compose stack (CPU) |
 | `npm run docker:up:gpu` | Compose stack + NVIDIA GPU |
+| `npm run docker:up:mac` | Compose stack + auto-start macOS Metal host agent |
+| `npm run host-agent` | Host agent foreground (debug) |
+| `npm run host-agent:stop` | Stop background host agent |
 
 ---
 

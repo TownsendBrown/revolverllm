@@ -50,6 +50,7 @@ app.whenReady().then(async () => {
   bindHandler("revolver:getConfig", () => handlers.getConfig());
   bindHandler("revolver:setConfig", handlers.setConfig);
   bindHandler("revolver:getGpu", () => handlers.getGpu());
+  bindHandler("revolver:getPlatform", () => handlers.getPlatform());
   bindHandler("revolver:getMonitor", () => handlers.getMonitor());
   bindHandler("revolver:getModels", () => handlers.getModels());
   bindHandler("revolver:getServerConfig", () => handlers.getServerConfig());

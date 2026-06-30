@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { promisify } from "util";
 import { loadConfig } from "../electron/lib/config";
@@ -144,13 +144,54 @@ function configDir(): string {
   return process.env.LLAMA_CONFIG_DIR ?? join(getRevolverRoot(), "data", "llama-config");
 }
 
+function decodeMountinfoField(field: string): string {
+  return field.replace(/\\040/g, " ").replace(/\\011/g, "\t");
+}
+
 /**
- * Mount source for the config dir on the host daemon. In compose the backend
- * writes to the `/llama-config` named volume, so spawned containers must mount
- * that same volume by name; in Electron it is a real host directory.
+ * Resolve the host-side source path for a mount point from /proc/self/mountinfo.
+ * Works for compose named volumes (`.../volumes/<name>/_data`) and bind mounts.
+ */
+function configMountSourceFromMountinfo(mountPoint: string): string | null {
+  const target = mountPoint.replace(/\/+$/, "") || "/";
+  try {
+    const lines = readFileSync("/proc/self/mountinfo", "utf8").split("\n");
+    let best: { root: string; mp: string } | null = null;
+    for (const line of lines) {
+      if (!line) continue;
+      const sep = line.indexOf(" - ");
+      if (sep < 0) continue;
+      const fields = line.slice(0, sep).split(" ");
+      if (fields.length < 5) continue;
+      const root = decodeMountinfoField(fields[3] ?? "");
+      const mp = decodeMountinfoField(fields[4] ?? "");
+      if (mp !== target && !mp.startsWith(`${target}/`)) continue;
+      if (!best || mp.length > best.mp.length) best = { root, mp };
+    }
+    if (!best?.root || best.root === "/") return null;
+    return best.root;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mount source for the config dir on the host daemon.
+ * - Mac Metal: explicit `LLAMA_CONFIG_HOST_DIR` bind mount (unchanged).
+ * - Compose: derive the real host path from the backend's `/llama-config` mount so
+ *   spawned containers share the same volume/bind source regardless of compose
+ *   project name (avoids hard-coded `revolver_llama-config` mismatches).
+ * - Electron: host `data/llama-config` directory.
  */
 function configMountSource(): string {
-  return process.env.LLAMA_CONFIG_VOLUME ?? process.env.LLAMA_CONFIG_HOST_DIR ?? configDir();
+  const hostDir = process.env.LLAMA_CONFIG_HOST_DIR;
+  if (hostDir) return hostDir;
+  if (process.env.REVOLVER_DOCKER === "1") {
+    const mountPoint = configDir();
+    const resolved = configMountSourceFromMountinfo(mountPoint);
+    if (resolved) return resolved;
+  }
+  return process.env.LLAMA_CONFIG_VOLUME ?? configDir();
 }
 
 /** Host path for the models dir (compose backend sees /models, but the host daemon needs the real path). */
@@ -203,7 +244,7 @@ function gpuRunArgs(def: ServerDefinition): string[] {
       // `device=0,1` is split into `device=0` + a bare `1` (read as Count),
       // triggering "cannot set both Count and DeviceIDs". The embedded quotes
       // keep `0,1` as a single field.
-      return ["--gpus", `"device=${hostDevices}"`, "-e", `CUDA_VISIBLE_DEVICES=${relative}`];
+      return ["--gpus", `device=${hostDevices}`, "-e", `CUDA_VISIBLE_DEVICES=${relative}`];
     case "rocm":
       return [
         "--device",

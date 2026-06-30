@@ -8,15 +8,18 @@ import { normalizeModelPath, toContainerModelPath } from "../electron/lib/modelP
 import { effectiveGpuLayers } from "../electron/lib/vram";
 import type { LoadedModelState, ServerDefinition, ServerInstanceStatus } from "../shared/types";
 import {
+  ensureServerRuntime,
+  fetchServerLogs,
+  getServerStartedAt,
+  inspectServerStatus,
+  restartServerRuntime,
+  stopServerRuntime,
+} from "./serverRuntime";
+import { isMetalBackend } from "./hostAgent";
+import {
   clearLoadEnv,
-  ensureServerContainer,
-  fetchContainerLogs,
-  getContainerStartedAt,
-  inspectContainerStatus,
   llamaConnectHost,
   relativeVisibleDevices,
-  restartServerContainer,
-  stopServerContainer,
   writeLoadEnv,
 } from "./containerUtils";
 
@@ -69,21 +72,22 @@ async function waitForModelReady(
         (l) =>
           l.includes("model loaded") ||
           l.includes("server is listening") ||
+          l.includes("HTTP server is listening") ||
           l.includes("HTTP server listening") ||
           l.includes("llama-server: model file not found"),
       )
     ) {
       if (dockerLogs.some((l) => l.includes("model file not found"))) {
-        throw new Error("Model file not found inside container — check MODEL_PATH mount");
+        throw new Error("Model file not found — check MODEL_PATH and models mount");
       }
-      return;
+      if (await probeLlamaReady(base, apiKey)) return;
     }
 
     if (await probeLlamaReady(base, apiKey)) return;
 
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new Error("Timed out waiting for model load (5 min). Check container logs.");
+  throw new Error("Timed out waiting for model load (5 min). Check server logs.");
 }
 
 /** Per-container llama-server runtime. */
@@ -134,13 +138,42 @@ export class InstanceRuntime {
     this.lastLoadError = null;
     this.loadStartedAt = Date.now();
     this.logs.setLimit(loadServerConfig().logLinesLimit);
-    void this.loadInner(opts?.force).catch((e) => {
-      const message = e instanceof Error ? e.message : String(e);
-      this.lastLoadError = message;
-      this.loadStartedAt = null;
-      this.logs.append(`[revolver] load failed: ${message}`);
-    });
+    this.logs.append(`[revolver] starting server "${this.def.name}" (${this.def.backend})`);
+    this.loadPromise = this.loadInner(opts?.force)
+      .catch((e) => {
+        const message = e instanceof Error ? e.message : String(e);
+        this.lastLoadError = message;
+        this.loadStartedAt = null;
+        this.logs.append(`[revolver] load failed: ${message}`);
+        throw e;
+      })
+      .finally(() => {
+        this.loadPromise = null;
+      });
     return this.status();
+  }
+
+  /** Verify llama is reachable; reload if backend thinks running but process is gone. */
+  async ensureReady(): Promise<void> {
+    await this.syncMetalHealth();
+    const base = `http://${this.getHost()}:${this.def.hostPort}`;
+    if (this.isRunning() && (await probeLlamaReady(base, this.getApiKey()))) return;
+    if (this.loadPromise) {
+      await this.loadPromise;
+      if (this.isRunning() && (await probeLlamaReady(base, this.getApiKey()))) return;
+    }
+    if (!this.def.modelPath) throw new Error("No model loaded on selected server");
+    this.state = null;
+    await this.loadInner(true);
+  }
+
+  private async syncMetalHealth(): Promise<void> {
+    if (!isMetalBackend(this.def) || !this.state?.running) return;
+    const base = `http://${this.getHost()}:${this.def.hostPort}`;
+    if (await probeLlamaReady(base, this.getApiKey())) return;
+    this.state = null;
+    this.lastLoadError = "llama-server unreachable — reload required";
+    this.logs.append("[revolver] llama-server unreachable — marked idle");
   }
 
   private async loadInner(_force?: boolean): Promise<LoadedModelState> {
@@ -157,11 +190,15 @@ export class InstanceRuntime {
     }
     const gpuLayers = effectiveGpuLayers(def.backend, def.nGpuLayers);
 
-    await ensureServerContainer(def);
+    await ensureServerRuntime(def);
 
     this.logs.append(`[revolver] loading server "${def.name}" (${def.backend})`);
     this.logs.append(`[revolver] model=${modelPath} ctx=${def.contextLength} gpu_layers=${gpuLayers}`);
-    this.logs.append(`[revolver] container path=${toContainerModelPath(modelPath)}`);
+    if (isMetalBackend(def)) {
+      this.logs.append(`[revolver] metal host-agent → port ${def.hostPort}`);
+    } else {
+      this.logs.append(`[revolver] container path=${toContainerModelPath(modelPath)}`);
+    }
     if (def.gpuDevices.length) {
       this.logs.append(
         `[revolver] GPUs=${def.gpuDevices.join(",")} mode=${def.gpuMode}`,
@@ -197,15 +234,13 @@ export class InstanceRuntime {
     });
 
     try {
-      await restartServerContainer(def.id);
+      await restartServerRuntime(def);
     } catch (e) {
       this.loadStartedAt = null;
       throw e;
     }
 
-    // Bound readiness logs to this container start so a previous run's
-    // "model loaded" line can't trigger a false-positive ready signal.
-    const since = await getContainerStartedAt(def.id);
+    const since = await getServerStartedAt(def);
 
     const base = `http://${this.getHost()}:${def.hostPort}`;
     try {
@@ -213,7 +248,7 @@ export class InstanceRuntime {
         base,
         this.getApiKey(),
         (line) => this.logs.append(line),
-        () => fetchContainerLogs(def.id, { since }),
+        () => fetchServerLogs(def, { since }),
       );
     } catch (e) {
       this.loadStartedAt = null;
@@ -262,9 +297,24 @@ export class InstanceRuntime {
    */
   async adopt(): Promise<void> {
     if (!this.def.modelPath || this.state?.running) return;
+
+    if (isMetalBackend(this.def)) {
+      const base = `http://${this.getHost()}:${this.def.hostPort}`;
+      try {
+        if (await probeLlamaReady(base, this.getApiKey())) {
+          const startedAt = (await getServerStartedAt(this.def)) ?? undefined;
+          this.state = this.buildState(startedAt);
+          this.logs.append(`[revolver] adopted running server "${this.def.name}" on ${base}`);
+        }
+      } catch {
+        return;
+      }
+      return;
+    }
+
     let status: string;
     try {
-      status = await inspectContainerStatus(this.def.id);
+      status = await inspectServerStatus(this.def);
     } catch {
       return;
     }
@@ -273,7 +323,7 @@ export class InstanceRuntime {
     const base = `http://${this.getHost()}:${this.def.hostPort}`;
     try {
       if (await probeLlamaReady(base, this.getApiKey())) {
-        const startedAt = (await getContainerStartedAt(this.def.id)) ?? undefined;
+        const startedAt = (await getServerStartedAt(this.def)) ?? undefined;
         this.state = this.buildState(startedAt);
         this.logs.append(`[revolver] adopted running server "${this.def.name}" on ${base}`);
       }
@@ -288,13 +338,14 @@ export class InstanceRuntime {
     this.loadStartedAt = null;
     this.lastLoadError = null;
     this.logs.append(`[revolver] stopping server "${this.def.name}"`);
-    await stopServerContainer(this.def.id);
+    await stopServerRuntime(this.def);
   }
 
   async refreshServerLogs(): Promise<void> {
     const tail = loadServerConfig().logLinesLimit;
-    const since = await getContainerStartedAt(this.def.id);
-    this.serverLogLines = await fetchContainerLogs(this.def.id, { tail, since });
+    const since = await getServerStartedAt(this.def);
+    this.serverLogLines = await fetchServerLogs(this.def, { tail, since });
+    await this.syncMetalHealth();
   }
 
   /** @deprecated use refreshServerLogs — kept for load-time log merge */

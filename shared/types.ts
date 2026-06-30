@@ -121,7 +121,7 @@ export interface MonitorSnapshot {
   gpu: GpuInfo;
 }
 
-export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu";
+export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu" | "metal";
 export type GpuMode = "single" | "combined";
 
 export interface ServerDefinition {
@@ -290,6 +290,12 @@ export interface RuntimeConfig {
   lastModelId: string | null;
 }
 
+/** Runtime platform flags (not persisted). */
+export interface PlatformCapabilities {
+  /** True when Revolver runs with macOS Metal host-agent (docker:up:mac). */
+  macMetal: boolean;
+}
+
 export interface LocalPaths {
   root: string;
   hubModels: string;
@@ -376,6 +382,7 @@ export interface RevolverApi {
   getConfig(): Promise<RevolverConfig>;
   setConfig(patch: Partial<RevolverConfig>): Promise<RevolverConfig>;
   getGpu(): Promise<GpuInfo>;
+  getPlatform(): Promise<PlatformCapabilities>;
   getMonitor(): Promise<MonitorSnapshot>;
   getModels(): Promise<{
     models: CatalogModel[];
