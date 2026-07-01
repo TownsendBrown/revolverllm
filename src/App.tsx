@@ -64,10 +64,10 @@ export default function App() {
   }, [tab, serverStatus?.activeCount, busy]);
 
   const nav: { id: Tab; label: string; icon: string }[] = [
-    { id: "chat", label: "Chat", icon: "💬" },
-    { id: "server", label: "Server", icon: "🌐" },
-    { id: "config", label: "Config", icon: "⚙️" },
-    { id: "monitor", label: "Monitor", icon: "📊" },
+    { id: "chat", label: "Chat", icon: ">" },
+    { id: "server", label: "Server", icon: "#" },
+    { id: "config", label: "Config", icon: "*" },
+    { id: "monitor", label: "Monitor", icon: "=" },
   ];
 
   const runAction = (fn: () => Promise<unknown> | void) => {
