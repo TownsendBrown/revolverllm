@@ -294,6 +294,8 @@ export interface RuntimeConfig {
 export interface PlatformCapabilities {
   /** True when Revolver runs with macOS Metal host-agent (docker:up:mac). */
   macMetal: boolean;
+  /** True when the backend container was started with GPU support (LLAMA_GPU=1). */
+  dockerGpu: boolean;
 }
 
 export interface LocalPaths {

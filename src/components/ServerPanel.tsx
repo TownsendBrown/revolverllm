@@ -38,13 +38,18 @@ const BACKENDS: { id: InferenceBackend; label: string; hint: string }[] = [
   { id: "cpu", label: "CPU", hint: "No GPU — runs on host CPU only" },
 ];
 
-function availableBackends(macMetal: boolean) {
-  if (!macMetal) return BACKENDS;
-  return BACKENDS.filter((b) => !DOCKER_GPU_BACKENDS.has(b.id));
+function availableBackends(macMetal: boolean, dockerGpu: boolean) {
+  if (macMetal && !dockerGpu) return BACKENDS.filter((b) => !DOCKER_GPU_BACKENDS.has(b.id));
+  if (dockerGpu) return BACKENDS.filter((b) => b.id !== "metal");
+  return BACKENDS;
 }
 
-function defaultWizardBackend(macMetal: boolean, gpuAvailable: boolean): InferenceBackend {
-  if (macMetal) return "metal";
+function defaultWizardBackend(
+  macMetal: boolean,
+  dockerGpu: boolean,
+  gpuAvailable: boolean,
+): InferenceBackend {
+  if (macMetal && !dockerGpu) return "metal";
   return gpuAvailable ? "cuda" : "cpu";
 }
 
@@ -97,6 +102,7 @@ export default function ServerPanel({
 
   const [backend, setBackend] = useState<InferenceBackend>("cuda");
   const [macMetal, setMacMetal] = useState(false);
+  const [dockerGpu, setDockerGpu] = useState(false);
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
   const [selectedModel, setSelectedModel] = useState("");
@@ -112,7 +118,10 @@ export default function ServerPanel({
   const logRef = useRef<HTMLPreElement>(null);
   const serverLogRef = useRef<HTMLPreElement>(null);
 
-  const wizardBackends = useMemo(() => availableBackends(macMetal), [macMetal]);
+  const wizardBackends = useMemo(
+    () => availableBackends(macMetal, dockerGpu),
+    [macMetal, dockerGpu],
+  );
 
   const refreshServers = useCallback(async () => {
     const list = await api.listServers();
@@ -122,14 +131,19 @@ export default function ServerPanel({
 
   useEffect(() => {
     refreshServers().catch((e) => onError(String(e)));
-    api.getPlatform().then((p) => setMacMetal(p.macMetal)).catch(() => {});
+    api.getPlatform()
+      .then((p) => {
+        setMacMetal(p.macMetal);
+        setDockerGpu(p.dockerGpu);
+      })
+      .catch(() => {});
     api.getServerConfig().then(setServerDraft);
   }, [configVersion, refreshServers, onError]);
 
   useEffect(() => {
-    if (!macMetal || !DOCKER_GPU_BACKENDS.has(backend)) return;
+    if (!macMetal || dockerGpu || !DOCKER_GPU_BACKENDS.has(backend)) return;
     setBackend("metal");
-  }, [macMetal, backend]);
+  }, [macMetal, dockerGpu, backend]);
 
   useEffect(() => {
     api.getRuntimeConfig().then((rt) => {
@@ -193,7 +207,7 @@ export default function ServerPanel({
 
   const resetWizard = () => {
     setWizardStep("backend");
-    setBackend(defaultWizardBackend(macMetal, gpu?.available ?? false));
+    setBackend(defaultWizardBackend(macMetal, dockerGpu, gpu?.available ?? false));
     setGpuDevices(gpu?.devices[0] != null ? [gpu.devices[0].index] : []);
     setGpuMode("single");
     setSelectedModel("");

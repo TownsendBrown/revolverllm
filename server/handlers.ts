@@ -187,7 +187,10 @@ export const handlers = {
     });
   },
   getGpu: () => getGpuInfoAsync(),
-  getPlatform: () => ({ macMetal: metalEnabled() }),
+  getPlatform: () => ({
+    macMetal: metalEnabled(),
+    dockerGpu: process.env.LLAMA_GPU === "1",
+  }),
   getMonitor: () => getMonitorSnapshotAsync(),
   getModels: () => getCatalog(loadedModelIds()),
   listServers: () => serverManager.listStatuses(),

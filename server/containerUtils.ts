@@ -244,7 +244,7 @@ function gpuRunArgs(def: ServerDefinition): string[] {
       // `device=0,1` is split into `device=0` + a bare `1` (read as Count),
       // triggering "cannot set both Count and DeviceIDs". The embedded quotes
       // keep `0,1` as a single field.
-      return ["--gpus", `device=${hostDevices}`, "-e", `CUDA_VISIBLE_DEVICES=${relative}`];
+      return ["--gpus", `"device=${hostDevices}"`, "-e", `CUDA_VISIBLE_DEVICES=${relative}`];
     case "rocm":
       return [
         "--device",
