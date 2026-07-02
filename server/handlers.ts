@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "fs";
+import { statSync } from "fs";
 import { clampContextLength, modelMaxContext } from "../electron/lib/contextLength";
 import { getGpuInfoAsync, getMonitorSnapshotAsync } from "./platformGpu";
 import {
@@ -9,6 +9,7 @@ import {
 } from "../electron/lib/models";
 import { readHubMeta } from "../electron/lib/localMeta";
 import { getLocalPaths, loadConfig, readLocalSettings, saveConfig } from "../electron/lib/paths";
+import { resolveRepoHostPath } from "../shared/openPath";
 import { loadRuntimeConfig, saveRuntimeConfig } from "../electron/lib/runtimeConfig";
 import { loadServerConfig, saveServerConfig } from "../electron/lib/serverConfig";
 import { estimateVram, evaluateGuardrails, effectiveGpuLayers } from "../electron/lib/vram";
@@ -16,7 +17,9 @@ import * as chatService from "../electron/lib/chatService";
 import { inferChatStream } from "../electron/lib/chatInfer";
 import type { CreateServerRequest, GpuInfo, GuardrailResult, VramEstimate } from "../electron/lib/types";
 import { metalEnabled } from "./hostAgent";
+import { canDispatchOpenPath, dispatchOpenPath } from "./openPathDispatch";
 import { serverManager } from "./serverManager";
+import { hostPathsForDocker, runtimeHostOs } from "../shared/openPath";
 
 type GpuDevices = GpuInfo["devices"];
 
@@ -176,7 +179,12 @@ async function prepareSendMessage(id: string, serverId?: string | null) {
 }
 
 export const handlers = {
-  getPaths: () => ({ ...getLocalPaths(), settings: readLocalSettings(), config: loadConfig() }),
+  getPaths: () => ({
+    ...getLocalPaths(),
+    repoRoot: resolveRepoHostPath(),
+    settings: readLocalSettings(),
+    config: loadConfig(),
+  }),
   getConfig: () => loadConfig(),
   setConfig: (patch: { modelsDir?: string; hubModelsDir?: string; localRoot?: string }) => {
     const current = loadConfig();
@@ -187,10 +195,16 @@ export const handlers = {
     });
   },
   getGpu: () => getGpuInfoAsync(),
-  getPlatform: () => ({
-    macMetal: metalEnabled(),
-    dockerGpu: process.env.LLAMA_GPU === "1",
-  }),
+  getPlatform: () => {
+    const metal = metalEnabled();
+    return {
+      macMetal: metal,
+      dockerGpu: process.env.LLAMA_GPU === "1",
+      os: runtimeHostOs(),
+      canOpenPath: canDispatchOpenPath(),
+      hostPaths: hostPathsForDocker(loadConfig()),
+    };
+  },
   getMonitor: () => getMonitorSnapshotAsync(),
   getModels: () => getCatalog(loadedModelIds()),
   listServers: () => serverManager.listStatuses(),
@@ -345,8 +359,5 @@ export const handlers = {
       onDelta,
     );
   },
-  openPath: (p: string) => {
-    if (!existsSync(p)) return "Path not found";
-    return p;
-  },
+  openPath: (p: string) => dispatchOpenPath(p),
 };

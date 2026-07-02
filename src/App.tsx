@@ -30,6 +30,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [configVersion, setConfigVersion] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [repoRoot, setRepoRoot] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -38,6 +39,7 @@ export default function App() {
       const paths = await api.getPaths();
       setConfig(paths.config);
       setConfigDraft(paths.config);
+      setRepoRoot(paths.repoRoot);
       const [m, g, s] = await Promise.all([
         api.getModels(),
         api.getGpu(),
@@ -86,22 +88,33 @@ export default function App() {
     Promise.resolve(fn()).catch((e) => setError(String(e)));
   };
 
+  const openFolder = (path: string) =>
+    api.openPath(path).then((err) => {
+      if (err) setError(err);
+    });
+
+  const canStopAll =
+    Boolean(serverStatus?.activeCount) ||
+    Boolean(serverStatus?.running) ||
+    serverStatus?.loadPhase === "loading" ||
+    Boolean(serverStatus?.servers?.some((s) => s.running || s.loadPhase === "loading"));
+
   const menuItems: { label: string; disabled?: boolean; action: () => Promise<unknown> | void }[] = [
     {
       label: "Stop all servers",
-      disabled: !serverStatus?.activeCount,
+      disabled: !canStopAll,
       action: () => api.unloadModel().then(refresh),
     },
     { label: "Clear server logs", action: () => api.clearServerLogs().then(refresh) },
     {
       label: "Open models folder",
       disabled: !config,
-      action: () => (config ? api.openPath(config.modelsDir) : undefined),
+      action: () => (config ? openFolder(config.modelsDir) : undefined),
     },
     {
       label: "Open data folder",
-      disabled: !config,
-      action: () => (config ? api.openPath(config.localRoot) : undefined),
+      disabled: !repoRoot,
+      action: () => (repoRoot ? openFolder(repoRoot) : undefined),
     },
     { label: "Refresh", action: refresh },
   ];
@@ -202,6 +215,7 @@ export default function App() {
               })
             }
             onRefresh={refresh}
+            onError={setError}
           />
         )}
 

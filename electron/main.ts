@@ -1,12 +1,15 @@
 import { existsSync } from "fs";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { applyElectronDockerEnv } from "./lib/dockerEnv";
 import { loadConfig } from "./lib/config";
+import { openPathElectron } from "./lib/openPath";
 import { handlers } from "../server/handlers";
+import { setNativeOpenPathOpener } from "../server/openPathDispatch";
 
 applyElectronDockerEnv();
+setNativeOpenPathOpener(openPathElectron);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -116,7 +119,7 @@ app.whenReady().then(async () => {
     return result.filePaths[0];
   });
 
-  ipcMain.handle("revolver:openPath", (_e, p: string) => shell.openPath(p));
+  ipcMain.handle("revolver:openPath", (_e, p: string) => handlers.openPath(p));
 
   createWindow();
   app.on("activate", () => {

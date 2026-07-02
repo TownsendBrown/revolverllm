@@ -6,7 +6,8 @@ export type HostAgentRequest =
   | { id: string; method: "inspect"; params: { serverId: string } }
   | { id: string; method: "logs"; params: { serverId: string; tail?: number; since?: string | null } }
   | { id: string; method: "list" }
-  | { id: string; method: "monitor" };
+  | { id: string; method: "monitor" }
+  | { id: string; method: "openPath"; params: { path: string } };
 
 export type HostAgentResponse =
   | { id: string; result: unknown }

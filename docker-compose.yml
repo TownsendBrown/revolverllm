@@ -37,6 +37,9 @@ services:
       # backend spawns per-server llama.cpp containers on the host daemon.
       # MUST be an absolute host path (relative paths won't resolve).
       REVOLVER_HOST_MODELS_DIR: ${MODELS_DIR:-./models}
+      REVOLVER_HOST_ROOT: ${REVOLVER_HOST_ROOT:-}
+      REVOLVER_HOST_AGENT_HOST: host.docker.internal
+      REVOLVER_HOST_AGENT_PORT: "9743"
       LLAMA_CONFIG_DIR: /llama-config
       # Fallback when mountinfo resolution is unavailable; compose project name
       # may differ, so spawned containers derive the host path from this mount.

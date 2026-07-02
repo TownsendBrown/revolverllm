@@ -4,6 +4,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { HostAgentRequest, HostAgentResponse } from "./protocol.js";
 import { getHostMonitorSnapshot } from "./monitor.js";
+import { openHostPath } from "./openPath.js";
 import { Supervisor } from "./supervisor.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -49,6 +50,8 @@ function handle(req: HostAgentRequest): Promise<HostAgentResponse> {
         return Promise.resolve({ id, result: supervisor.list() });
       case "monitor":
         return Promise.resolve({ id, result: getHostMonitorSnapshot() });
+      case "openPath":
+        return openHostPath(req.params.path).then((result) => ({ id, result }));
       default:
         return Promise.resolve({ id, error: `unknown method: ${(req as HostAgentRequest).method}` });
     }

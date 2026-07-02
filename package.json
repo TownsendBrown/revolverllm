@@ -11,11 +11,13 @@
     "server": "tsx server/index.ts",
     "start": "env -u ELECTRON_RUN_AS_NODE ELECTRON_NO_SANDBOX=1 electron .",
     "pack": "npm run build && electron-builder --linux dir",
-    "docker:up": "docker compose up --build",
-    "docker:up:gpu": "docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build",
+    "docker:up": "scripts/docker-up.sh up --build",
+    "docker:up:gpu": "scripts/docker-up.sh -f docker-compose.yml -f docker-compose.gpu.yml up --build",
     "docker:up:mac": "mac/scripts/docker-up-mac.sh",
     "host-agent": "mac/scripts/run-host-agent.sh",
-    "host-agent:stop": "mac/scripts/stop-host-agent.sh"
+    "host-agent:stop": "mac/scripts/stop-host-agent.sh",
+    "host-open-agent": "scripts/run-host-open-agent.sh",
+    "host-open-agent:stop": "scripts/stop-host-open-agent.sh"
   },
   "build": {
     "appId": "ai.revolver.app",

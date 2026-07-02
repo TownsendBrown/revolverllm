@@ -27,6 +27,7 @@ export function getLocalPaths(): LocalPaths {
     settings: join(root, "settings.json"),
     configPath: join(getRevolverRoot(), "config.json"),
     dataDir: getDataDir(),
+    repoRoot: getRevolverRoot(),
   };
 }
 

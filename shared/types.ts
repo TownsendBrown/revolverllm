@@ -290,12 +290,25 @@ export interface RuntimeConfig {
   lastModelId: string | null;
 }
 
+/** Host paths visible to the OS file manager (Docker maps container paths to these). */
+export interface PlatformHostPaths {
+  modelsDir: string;
+  hubModelsDir: string;
+  localRoot: string;
+  repoRoot: string;
+}
+
 /** Runtime platform flags (not persisted). */
 export interface PlatformCapabilities {
   /** True when Revolver runs with macOS Metal host-agent (docker:up:mac). */
   macMetal: boolean;
   /** True when the backend container was started with GPU support (LLAMA_GPU=1). */
   dockerGpu: boolean;
+  os: "darwin" | "linux" | "win32" | "other";
+  /** True when openPath can reach the host file manager. */
+  canOpenPath: boolean;
+  /** Host-side paths when running in Docker (for display / open folder). */
+  hostPaths?: PlatformHostPaths;
 }
 
 export interface LocalPaths {
@@ -306,6 +319,8 @@ export interface LocalPaths {
   settings: string;
   configPath: string;
   dataDir: string;
+  /** Revolver repo root on the host (codebase). */
+  repoRoot: string;
 }
 
 export interface RevolverConfig {

@@ -8,6 +8,7 @@ type Props = {
   gpu: GpuInfo | null;
   onSavePaths: () => void;
   onRefresh: () => void;
+  onError: (message: string) => void;
 };
 
 function gb(n: number) {
@@ -21,6 +22,7 @@ export default function ConfigPanel({
   gpu,
   onSavePaths,
   onRefresh,
+  onError,
 }: Props) {
   const [runtimeDraft, setRuntimeDraft] = useState<RuntimeConfig | null>(null);
 
@@ -135,7 +137,14 @@ export default function ConfigPanel({
             Save paths
           </button>
           {config && (
-            <button type="button" onClick={() => api.openPath(config.modelsDir)}>
+            <button
+              type="button"
+              onClick={() =>
+                api.openPath(config.modelsDir).then((err) => {
+                  if (err) onError(err);
+                })
+              }
+            >
               Open models folder
             </button>
           )}
