@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" shape-rendering="crispEdges" role="img" aria-label="Configuration">
+  <title>Configuration</title>
+
+  <defs>
+    <g id="slider-handle">
+      <rect width="8" height="5" fill="#9892a8"/>
+      <rect width="8" height="1" fill="#c8c4d8"/>
+      <rect width="1" height="5" fill="#c8c4d8"/>
+      <rect x="7" y="1" width="1" height="4" fill="#4a4658"/>
+      <rect y="4" width="8" height="1" fill="#4a4658"/>
+    </g>
+  </defs>
+
+  <!-- outer bevel -->
+  <rect width="48" height="48" fill="#5a5468"/>
+  <rect x="1" y="1" width="46" height="46" fill="#9892a8"/>
+  <rect x="1" y="1" width="46" height="1" fill="#c8c4d8"/>
+  <rect x="1" y="1" width="1" height="46" fill="#c8c4d8"/>
+  <rect x="2" y="45" width="44" height="1" fill="#4a4658"/>
+  <rect x="45" y="2" width="1" height="44" fill="#4a4658"/>
+
+  <!-- inner panel -->
+  <rect x="4" y="4" width="40" height="30" fill="#ece9d8"/>
+  <rect x="4" y="4" width="40" height="1" fill="#808080"/>
+  <rect x="4" y="4" width="1" height="30" fill="#808080"/>
+  <rect x="43" y="5" width="1" height="28" fill="#ffffff"/>
+  <rect x="5" y="33" width="38" height="1" fill="#ffffff"/>
+
+  <!-- sliders: 36px tracks centered in panel, knobs inset to track ends -->
+  <g id="sliders">
+    <rect x="6" y="10" width="36" height="2" fill="#000000"/>
+    <use href="#slider-handle" x="34" y="8"/>
+
+    <rect x="6" y="18" width="36" height="2" fill="#000000"/>
+    <use href="#slider-handle" x="6" y="16"/>
+
+    <rect x="6" y="26" width="36" height="2" fill="#000000"/>
+    <use href="#slider-handle" x="34" y="24"/>
+  </g>
+
+  <!-- footer -->
+  <rect x="3" y="36" width="42" height="9" fill="#ece9d8"/>
+  <rect x="3" y="36" width="42" height="1" fill="#808080"/>
+  <rect x="3" y="36" width="1" height="9" fill="#808080"/>
+  <rect x="44" y="37" width="1" height="7" fill="#ffffff"/>
+  <rect x="4" y="44" width="40" height="1" fill="#ffffff"/>
+  <text x="24" y="42" text-anchor="middle" dominant-baseline="middle" font-family="Courier New, monospace" font-size="5" font-weight="700" fill="#000000">config</text>
+</svg>

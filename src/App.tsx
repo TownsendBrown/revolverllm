@@ -4,6 +4,10 @@ import ChatPanel from "./components/ChatPanel";
 import Logo from "./components/Logo";
 import MonitorPanel from "./components/MonitorPanel";
 import ServerPanel from "./components/ServerPanel";
+import configIcon from "../icons/config-icon.v5.svg";
+import chatIcon from "../icons/chat-icon.v1.svg";
+import monitorIcon from "../icons/monitor-icon.v2.svg";
+import serverIcon from "../icons/servers-icon.v2.svg";
 import {
   api,
   type CatalogModel,
@@ -63,6 +67,13 @@ export default function App() {
     return () => clearInterval(t);
   }, [tab, serverStatus?.activeCount, busy]);
 
+  const navIcons: Partial<Record<Tab, string>> = {
+    chat: chatIcon,
+    config: configIcon,
+    monitor: monitorIcon,
+    server: serverIcon,
+  };
+
   const nav: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: "Chat", icon: ">" },
     { id: "server", label: "Server", icon: "#" },
@@ -99,17 +110,26 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <Logo />
-        {nav.map((n) => (
-          <button
-            key={n.id}
-            className={`nav-btn ${tab === n.id ? "active" : ""}`}
-            onClick={() => setTab(n.id)}
-            title={n.label}
-          >
-            <span className="nav-icon">{n.icon}</span>
-            <span className="nav-label">{n.label}</span>
-          </button>
-        ))}
+        {nav.map((n) => {
+          const svgIcon = navIcons[n.id];
+          return (
+            <button
+              key={n.id}
+              className={`nav-btn ${tab === n.id ? "active" : ""}${svgIcon ? " nav-btn-icon-fill" : ""}`}
+              onClick={() => setTab(n.id)}
+              title={n.label}
+            >
+              <span className={`nav-icon${svgIcon ? " nav-icon-svg" : ""}`}>
+                {svgIcon ? (
+                  <img src={svgIcon} alt="" className="nav-icon-img" />
+                ) : (
+                  n.icon
+                )}
+              </span>
+              {!svgIcon && <span className="nav-label">{n.label}</span>}
+            </button>
+          );
+        })}
         <div className="sidebar-foot">
           {serverStatus?.activeCount ? (
             <>
