@@ -8,3 +8,4 @@ data/
 .env
 config.local.json
 models/
+.DS_Store
