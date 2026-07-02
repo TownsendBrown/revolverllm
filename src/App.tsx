@@ -105,7 +105,6 @@ export default function App() {
       disabled: !canStopAll,
       action: () => api.unloadModel().then(refresh),
     },
-    { label: "Clear server logs", action: () => api.clearServerLogs().then(refresh) },
     {
       label: "Open models folder",
       disabled: !config,

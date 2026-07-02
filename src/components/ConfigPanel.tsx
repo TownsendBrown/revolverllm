@@ -126,13 +126,6 @@ export default function ConfigPanel({
               onChange={(e) => setConfigDraft({ ...configDraft, modelsDir: e.target.value })}
             />
           </label>
-          <label>
-            Hub metadata
-            <input
-              value={configDraft.hubModelsDir}
-              onChange={(e) => setConfigDraft({ ...configDraft, hubModelsDir: e.target.value })}
-            />
-          </label>
           <button className="primary" onClick={onSavePaths}>
             Save paths
           </button>

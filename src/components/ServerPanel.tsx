@@ -644,9 +644,6 @@ export default function ServerPanel({
         <details className="panel log-panel collapsible" open>
           <summary>
             <h3>Container logs</h3>
-            <div className="log-actions" onClick={(e) => e.preventDefault()}>
-              <button onClick={() => api.clearServerLogs(def.id).then(onRefresh)}>Clear</button>
-            </div>
           </summary>
           <pre ref={logRef} className="log-view">
             {displayContainerLogs.join("\n") || "No logs yet."}
