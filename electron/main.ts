@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { applyElectronDockerEnv } from "./lib/dockerEnv";
-import { loadConfig } from "./lib/config";
+import { initElectronConfig, loadConfig } from "./lib/config";
 import { openPathElectron } from "./lib/openPath";
 import { handlers } from "../server/handlers";
 import { setNativeOpenPathOpener } from "../server/openPathDispatch";
@@ -28,7 +28,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: "Revolver",
-    backgroundColor: "#0f1117",
+    backgroundColor: "#d4d0c8",
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,
@@ -49,6 +49,8 @@ function bindHandler(channel: string, fn: (...args: unknown[]) => unknown) {
 }
 
 app.whenReady().then(async () => {
+  initElectronConfig();
+
   bindHandler("revolver:getPaths", () => handlers.getPaths());
   bindHandler("revolver:getConfig", () => handlers.getConfig());
   bindHandler("revolver:setConfig", handlers.setConfig);
