@@ -48,6 +48,7 @@ export default function MonitorPanel() {
   const [snapshot, setSnapshot] = useState<MonitorSnapshot | null>(null);
   const [error, setError] = useState("");
   const [polling, setPolling] = useState(true);
+  const [macMetal, setMacMetal] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -61,6 +62,9 @@ export default function MonitorPanel() {
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
+    api.getPlatform()
+      .then((p) => setMacMetal(p.macMetal))
+      .catch(() => {});
   }, [refresh]);
 
   useEffect(() => {
@@ -167,50 +171,52 @@ export default function MonitorPanel() {
         )}
       </section>
 
-      <section className="panel monitor-section">
-        <h3>GPU</h3>
-        {!gpu?.available && (
-          <p className="muted">
-            {gpu?.error ? `No GPU data: ${gpu.error}` : "No GPU detected"}
-          </p>
-        )}
-        {gpu?.available && (
-          <>
-            <p className="gpu-summary">
-              {gpu.deviceCount} GPU{gpu.deviceCount !== 1 ? "s" : ""} ·{" "}
-              <strong>{gb(gpu.totalVramBytes)}</strong> VRAM ·{" "}
-              <strong>{gb(gpu.totalFreeVramBytes)}</strong> free
+      {!macMetal && (
+        <section className="panel monitor-section">
+          <h3>GPU</h3>
+          {!gpu?.available && (
+            <p className="muted">
+              {gpu?.error ? `No GPU data: ${gpu.error}` : "No GPU detected"}
             </p>
-            <div className="monitor-gpu-grid">
-              {gpu.devices.map((d) => (
-                <div key={d.index} className="monitor-gpu-card">
-                  <div className="monitor-gpu-head">
-                    <strong>GPU {d.index}</strong>
-                    <span className="muted">{d.name}</span>
+          )}
+          {gpu?.available && (
+            <>
+              <p className="gpu-summary">
+                {gpu.deviceCount} GPU{gpu.deviceCount !== 1 ? "s" : ""} ·{" "}
+                <strong>{gb(gpu.totalVramBytes)}</strong> VRAM ·{" "}
+                <strong>{gb(gpu.totalFreeVramBytes)}</strong> free
+              </p>
+              <div className="monitor-gpu-grid">
+                {gpu.devices.map((d) => (
+                  <div key={d.index} className="monitor-gpu-card">
+                    <div className="monitor-gpu-head">
+                      <strong>GPU {d.index}</strong>
+                      <span className="muted">{d.name}</span>
+                    </div>
+                    <UtilBar
+                      label="GPU utilization"
+                      value={d.gpuUtilPercent ?? null}
+                      tone="green"
+                    />
+                    <UtilBar
+                      label="VRAM"
+                      value={d.usedPercent ?? null}
+                      detail={`${d.freeGb} / ${d.totalGb} GB free`}
+                    />
+                    {d.memUtilPercent != null && (
+                      <UtilBar label="VRAM controller" value={d.memUtilPercent} tone="amber" />
+                    )}
+                    <div className="monitor-gpu-foot">
+                      {d.temperatureC != null && <span>{d.temperatureC}°C</span>}
+                      {d.powerW != null && <span>{d.powerW} W</span>}
+                    </div>
                   </div>
-                  <UtilBar
-                    label="GPU utilization"
-                    value={d.gpuUtilPercent ?? null}
-                    tone="green"
-                  />
-                  <UtilBar
-                    label="VRAM"
-                    value={d.usedPercent ?? null}
-                    detail={`${d.freeGb} / ${d.totalGb} GB free`}
-                  />
-                  {d.memUtilPercent != null && (
-                    <UtilBar label="VRAM controller" value={d.memUtilPercent} tone="amber" />
-                  )}
-                  <div className="monitor-gpu-foot">
-                    {d.temperatureC != null && <span>{d.temperatureC}°C</span>}
-                    {d.powerW != null && <span>{d.powerW} W</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }
