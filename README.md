@@ -1,5 +1,5 @@
-<p align="center">
-  <img src="img/logo.png" alt="Revolver" width="128" />
+<p align="left">
+  <img src="img/logo.png" alt="Revolver" width="256" />
 </p>
 
 # Revolver
