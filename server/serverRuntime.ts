@@ -1,4 +1,5 @@
 import type { ServerDefinition } from "../shared/types";
+import { getEngine } from "../engines";
 import {
   ensureServerContainer,
   fetchContainerLogs,
@@ -31,7 +32,7 @@ export async function ensureServerRuntime(def: ServerDefinition): Promise<void> 
     await hostAgentCall("ensure", { serverId: def.id, hostPort: def.hostPort }, HOST_AGENT_FAST_MS);
     return;
   }
-  await ensureServerContainer(def);
+  await ensureServerContainer(def, getEngine(def.engine).containerSpec(def));
 }
 
 export async function restartServerRuntime(def: ServerDefinition): Promise<void> {

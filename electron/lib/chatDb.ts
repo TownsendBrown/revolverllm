@@ -36,6 +36,7 @@ function initSchema(database: Database.Database): void {
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
       content TEXT NOT NULL,
+      reasoning TEXT,
       created_at TEXT NOT NULL,
       prompt_tokens INTEGER,
       completion_tokens INTEGER,
@@ -65,6 +66,9 @@ function migrateSchema(database: Database.Database): void {
   if (!msgCols.some((c) => c.name === "ttft_ms")) {
     database.exec(`ALTER TABLE messages ADD COLUMN ttft_ms REAL`);
   }
+  if (!msgCols.some((c) => c.name === "reasoning")) {
+    database.exec(`ALTER TABLE messages ADD COLUMN reasoning TEXT`);
+  }
 }
 
 function rowToConversation(row: Record<string, unknown>): ChatConversation {
@@ -89,6 +93,7 @@ function rowToMessage(row: Record<string, unknown>): ChatMessage {
     conversationId: String(row.conversation_id),
     role: row.role as ChatMessage["role"],
     content: String(row.content),
+    reasoning: row.reasoning != null ? String(row.reasoning) : null,
     createdAt: String(row.created_at),
     promptTokens: row.prompt_tokens != null ? Number(row.prompt_tokens) : null,
     completionTokens: row.completion_tokens != null ? Number(row.completion_tokens) : null,
@@ -175,23 +180,29 @@ export function addMessage(
     tokensPerSecond?: number;
     promptTokensPerSecond?: number;
     ttftMs?: number;
+    reasoning?: string | null;
   },
 ): ChatMessage {
   const id = randomUUID();
   const now = new Date().toISOString();
+  const reasoning =
+    usage?.reasoning != null && String(usage.reasoning).trim()
+      ? String(usage.reasoning)
+      : null;
   getDb()
     .prepare(
       `INSERT INTO messages (
-        id, conversation_id, role, content, created_at,
+        id, conversation_id, role, content, reasoning, created_at,
         prompt_tokens, completion_tokens, tokens_per_second,
         prompt_tokens_per_second, ttft_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
       conversationId,
       role,
       content,
+      reasoning,
       now,
       usage?.promptTokens ?? null,
       usage?.completionTokens ?? null,

@@ -9,6 +9,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY electron ./electron
 COPY shared ./shared
+COPY engines ./engines
 COPY server ./server
 COPY docker/config.json ./config.json
 ENV NODE_ENV=production

@@ -19,6 +19,7 @@ const routes: Array<{ method: "get" | "post"; path: string; name: HandlerName }>
   { method: "get", path: "/api/platform", name: "getPlatform" },
   { method: "get", path: "/api/monitor", name: "getMonitor" },
   { method: "get", path: "/api/models", name: "getModels" },
+  { method: "get", path: "/api/engines", name: "getEngines" },
   { method: "post", path: "/api/vram/estimate", name: "estimateVram" },
   { method: "post", path: "/api/models/load", name: "loadModel" },
   { method: "post", path: "/api/models/load-path", name: "loadModelFromPath" },
@@ -179,7 +180,8 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
     }
     const serverId =
       typeof req.body?.serverId === "string" ? req.body.serverId : req.body?.serverId ?? null;
-    res.json(await handlers.sendMessage(req.params.id, content, serverId));
+    const enableThinking = req.body?.enableThinking === true;
+    res.json(await handlers.sendMessage(req.params.id, content, serverId, undefined, enableThinking));
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });
@@ -194,6 +196,7 @@ app.post("/api/conversations/:id/messages/stream", async (req, res) => {
   }
   const serverId =
     typeof req.body?.serverId === "string" ? req.body.serverId : req.body?.serverId ?? null;
+  const enableThinking = req.body?.enableThinking === true;
 
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -228,9 +231,15 @@ app.post("/api/conversations/:id/messages/stream", async (req, res) => {
   };
 
   try {
-    const result = await handlers.sendMessage(req.params.id, content, serverId, (delta) => {
-      writeEvent({ delta });
-    });
+    const result = await handlers.sendMessage(
+      req.params.id,
+      content,
+      serverId,
+      (delta) => {
+        writeEvent({ delta });
+      },
+      enableThinking,
+    );
     writeEvent({ done: true, result });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

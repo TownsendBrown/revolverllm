@@ -1,6 +1,11 @@
 import * as chatDb from "./chatDb";
 import { loadRuntimeConfig } from "./runtimeConfig";
-import type { ChatConversation, ChatMessage, ConversationMeta } from "../../shared/types";
+import type {
+  ChatConversation,
+  ChatMessage,
+  ConversationMeta,
+  StreamDelta,
+} from "../../shared/types";
 
 export interface InferMetrics {
   promptTokens: number | null;
@@ -12,9 +17,10 @@ export interface InferMetrics {
 
 export type ChatInference = (
   messages: Array<{ role: string; content: string }>,
-  onDelta?: (delta: string) => void,
+  onDelta?: (delta: StreamDelta) => void,
 ) => Promise<{
   content: string;
+  reasoning?: string | null;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
   metrics?: InferMetrics;
 }>;
@@ -91,7 +97,7 @@ export async function sendMessage(
   content: string,
   infer: ChatInference,
   meta?: ConversationMeta,
-  onDelta?: (delta: string) => void,
+  onDelta?: (delta: StreamDelta) => void,
 ): Promise<{ userMessage: ChatMessage; assistantMessage: ChatMessage }> {
   return withConversationLock(conversationId, async () => {
     const conv = chatDb.getConversation(conversationId);
@@ -122,6 +128,7 @@ export async function sendMessage(
       tokensPerSecond: metrics.tokensPerSecond ?? undefined,
       promptTokensPerSecond: metrics.promptTokensPerSecond ?? undefined,
       ttftMs: metrics.ttftMs ?? undefined,
+      reasoning: result.reasoning ?? null,
     });
     return { userMessage, assistantMessage };
   });

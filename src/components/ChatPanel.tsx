@@ -7,6 +7,7 @@ import {
   type ServerInstanceStatus,
   type ServerStatus,
 } from "../revolver";
+import { resolveSupportsReasoning, estimateTokens } from "../../shared/reasoning";
 import { publishChatEvent, subscribeChatEvents, type ChatSyncEvent } from "../lib/chatSync";
 import {
   conversationIdFromUrl,
@@ -15,6 +16,7 @@ import {
   subscribeConversationUrl,
 } from "../lib/chatUrl";
 import ChatMarkdown from "./ChatMarkdown";
+import ReasoningTrace from "./ReasoningTrace";
 
 interface Props {
   serverStatus: ServerStatus | null;
@@ -32,6 +34,41 @@ function formatRelative(iso: string) {
 
 function formatTtft(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`;
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
+/** Best-effort context fill: last reported usage, else char heuristic. */
+function contextUsedTokens(messages: ChatMessage[], draft: string): number {
+  let used = 0;
+  let lastUsageIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.promptTokens != null && m.completionTokens != null) {
+      used = m.promptTokens + m.completionTokens;
+      lastUsageIdx = i;
+      break;
+    }
+  }
+  if (lastUsageIdx < 0) {
+    for (const m of messages) {
+      used += estimateTokens(m.content);
+      if (m.reasoning) used += estimateTokens(m.reasoning);
+    }
+  } else {
+    for (let i = lastUsageIdx + 1; i < messages.length; i++) {
+      const m = messages[i];
+      used += estimateTokens(m.content);
+      if (m.reasoning) used += estimateTokens(m.reasoning);
+    }
+  }
+  if (draft.trim()) used += estimateTokens(draft);
+  return used;
 }
 
 function metaFromServer(s: ServerInstanceStatus): ConversationMeta {
@@ -62,6 +99,7 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
   const [loadingThread, setLoadingThread] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [enableThinking, setEnableThinking] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeIdRef = useRef<string | null>(activeId);
@@ -273,6 +311,27 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
   }, [messages, sending, remoteGenerating]);
 
   const selectedServer = runningServers.find((s) => s.definition.id === selectedServerId) ?? null;
+  const thinkingSupported = resolveSupportsReasoning({
+    fromProps: selectedServer?.supportsReasoning,
+    hints: [
+      selectedServer?.definition.modelId,
+      selectedServer?.definition.modelPath,
+      selectedServer?.definition.name,
+      selectedServer?.loaded?.modelId,
+      selectedServer?.loaded?.modelPath,
+    ],
+  });
+  const contextLimit =
+    selectedServer?.nCtx ??
+    selectedServer?.definition.contextLength ??
+    selectedServer?.loaded?.contextLength ??
+    activeConv?.contextLength ??
+    null;
+  const contextUsed = contextUsedTokens(messages, input);
+  const contextPct =
+    contextLimit && contextLimit > 0
+      ? Math.min(100, Math.round((contextUsed / contextLimit) * 100))
+      : null;
 
   const pickServer = async (serverId: string) => {
     setSelectedServerId(serverId);
@@ -388,6 +447,7 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
         conversationId: convId,
         role: "user",
         content: text,
+        reasoning: null,
         createdAt: new Date().toISOString(),
         promptTokens: null,
         completionTokens: null,
@@ -400,6 +460,7 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
         conversationId: convId,
         role: "assistant",
         content: "",
+        reasoning: null,
         createdAt: new Date().toISOString(),
         promptTokens: null,
         completionTokens: null,
@@ -411,11 +472,21 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
 
       const result = await api.sendMessage(convId, text, {
         serverId: selectedServerId,
+        enableThinking: thinkingSupported && enableThinking,
         signal: abort.signal,
         onDelta: (delta) => {
           if (activeIdRef.current !== convId) return;
           setMessages((prev) =>
-            prev.map((m) => (m.id === streamId ? { ...m, content: m.content + delta } : m)),
+            prev.map((m) => {
+              if (m.id !== streamId) return m;
+              return {
+                ...m,
+                content: delta.content ? m.content + delta.content : m.content,
+                reasoning: delta.reasoning
+                  ? (m.reasoning ?? "") + delta.reasoning
+                  : m.reasoning,
+              };
+            }),
           );
         },
       });
@@ -621,9 +692,16 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
               <div className="chat-msg-body">
                 {m.role === "assistant" ? (
                   <>
+                    {(m.reasoning ||
+                      (m.id.startsWith("stream-") && sending && enableThinking && !m.content)) && (
+                      <ReasoningTrace
+                        reasoning={m.reasoning ?? ""}
+                        streaming={m.id.startsWith("stream-") && sending && !m.content}
+                      />
+                    )}
                     {m.content ? (
                       <ChatMarkdown content={m.content} />
-                    ) : (
+                    ) : m.reasoning ? null : (
                       <span className="dot-pulse" />
                     )}
                     {m.id.startsWith("stream-") && sending && m.content && (
@@ -665,6 +743,28 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
         </div>
 
         <div className="chat-composer">
+          {contextLimit != null && contextLimit > 0 && (
+            <div
+              className={`chat-context-meter ${
+                contextPct != null && contextPct >= 90
+                  ? "critical"
+                  : contextPct != null && contextPct >= 70
+                    ? "warn"
+                    : ""
+              }`}
+              title={`Context ~${formatTokenCount(contextUsed)} / ${formatTokenCount(contextLimit)} tokens (${contextPct ?? 0}%)`}
+            >
+              <div className="chat-context-meter-track">
+                <div
+                  className="chat-context-meter-fill"
+                  style={{ height: `${contextPct ?? 0}%` }}
+                />
+              </div>
+              <span className="chat-context-meter-label">
+                {contextPct ?? 0}%
+              </span>
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={input}
@@ -687,6 +787,20 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
               }
             }}
           />
+          {thinkingSupported && (
+            <label
+              className={`chat-thinking-toggle ${enableThinking ? "on" : ""}`}
+              title="Ask the model to show its reasoning before the reply"
+            >
+              <input
+                type="checkbox"
+                checked={enableThinking}
+                disabled={sending || inputLocked}
+                onChange={(e) => setEnableThinking(e.target.checked)}
+              />
+              <span>Think</span>
+            </label>
+          )}
           <button
             className="primary chat-send-btn"
             disabled={inputLocked || !input.trim()}

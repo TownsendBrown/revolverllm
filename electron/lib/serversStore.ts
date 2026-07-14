@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { getDataDir } from "./config";
 import { normalizeModelPath } from "./modelPaths";
 import { effectiveGpuLayers } from "./vram";
-import type { InferenceBackend, GpuMode, ServerDefinition } from "../../shared/types";
+import type { EngineId, InferenceBackend, GpuMode, ServerDefinition } from "../../shared/types";
 
 const BASE_PORT = 8082;
 
@@ -20,10 +20,12 @@ interface ServersFile {
 function normalizeDefinition(def: ServerDefinition): ServerDefinition {
   return {
     ...def,
+    engine: def.engine ?? "llamacpp",
     apiKey: def.apiKey ?? null,
     modelPath: normalizeModelPath(def.modelPath),
     mmprojPath: def.mmprojPath ? normalizeModelPath(def.mmprojPath) : null,
     nGpuLayers: effectiveGpuLayers(def.backend, def.nGpuLayers),
+    engineConfig: def.engineConfig ?? {},
   };
 }
 
@@ -88,6 +90,7 @@ export function removeServerDefinition(id: string): boolean {
 
 export function createServerDefinition(opts: {
   name: string;
+  engine?: EngineId;
   backend: InferenceBackend;
   gpuDevices: number[];
   gpuMode: GpuMode;
@@ -96,6 +99,7 @@ export function createServerDefinition(opts: {
   contextLength: number;
   nGpuLayers: number;
   kvCacheDtype: string;
+  engineConfig?: Record<string, unknown>;
   mmprojPath?: string | null;
   apiKey?: string | null;
 }): ServerDefinition {
@@ -103,6 +107,7 @@ export function createServerDefinition(opts: {
   const def: ServerDefinition = {
     id: randomUUID().slice(0, 8),
     name: opts.name,
+    engine: opts.engine ?? "llamacpp",
     backend: opts.backend,
     gpuDevices: opts.gpuDevices,
     gpuMode: opts.gpuMode,
@@ -112,6 +117,7 @@ export function createServerDefinition(opts: {
     contextLength: opts.contextLength,
     nGpuLayers: opts.nGpuLayers,
     kvCacheDtype: opts.kvCacheDtype,
+    engineConfig: opts.engineConfig ?? {},
     hostPort: allocatePort(),
     apiKey: opts.apiKey ?? null,
     createdAt: now,

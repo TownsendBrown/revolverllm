@@ -1,11 +1,15 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, relative } from "path";
 import { load as yamlLoad } from "js-yaml";
 import { readGgufMetadataCached } from "./ggufMetadata";
 import { metaGet, metaNumber, metaString } from "./ggufMeta";
 import { getDownloadsDir, getHubModelsDir, getLocalPaths, getModelIndexCachePath } from "./paths";
+import { readGgufCacheEntry } from "./localMeta";
 import { normalizeModelPath, toFsPath } from "./modelPaths";
-import type { CatalogModel, HubModel, LocalGgufModel, ModelFile } from "./types";
+import { isHfRepoId, scanLocalHfModels, classifyLocalModelPath } from "./hfModels";
+import { enginesForModel } from "../../engines/registry";
+import type { CatalogModel, HubModel, LocalGgufModel, ModelFile, ModelFormat, ModelSource } from "./types";
+import type { ModelRef } from "../../engines/types";
 
 function parseModelYaml(text: string): Record<string, unknown> {
   try {
@@ -195,45 +199,106 @@ export function buildCatalog(loadedModelIds: string | string[] | null): CatalogM
     loaded.has(id) || (path != null && loaded.has(path));
   const hub = scanHubModels();
   const local = scanLocalGguf();
+  const hf = scanLocalHfModels();
   linkHubToLocal(hub, local);
   enrichFromIndexCache(hub);
 
   const linkedPaths = new Set<string>();
   const models: CatalogModel[] = [];
 
+  const catalogEntry = (opts: {
+    id: string;
+    displayName: string;
+    subtitle: string;
+    path: string | null;
+    sizeBytes: number | null;
+    source: CatalogModel["source"];
+    format: ModelFormat | null;
+    params: string;
+    hasWeights: boolean;
+    contextLengths: number[];
+    minMemoryBytes: number | null;
+    architectures?: string[];
+    modelType?: string;
+  }): CatalogModel => {
+    const { architectures, modelType, ...rest } = opts;
+    return {
+      ...rest,
+      compatibleEngines: opts.format
+        ? enginesForModel({
+            format: opts.format,
+            modelId: opts.id,
+            modelType,
+            architectures,
+          })
+        : ["llamacpp", "vllm"],
+      loaded: isLoaded(opts.id, opts.path),
+    };
+  };
+
   for (const h of hub) {
     const path = h.entryPoint?.path ?? null;
     if (path) linkedPaths.add(path);
-    models.push({
-      id: h.id,
-      displayName: h.displayName,
-      subtitle: h.id,
-      path,
-      sizeBytes: h.entryPoint?.sizeBytes ?? null,
-      source: "hub",
-      params: h.params,
-      hasWeights: h.hasWeights,
-      contextLengths: h.contextLengths,
-      minMemoryBytes: h.minMemoryBytes,
-      loaded: isLoaded(h.id, path),
-    });
+    models.push(
+      catalogEntry({
+        id: h.id,
+        displayName: h.displayName,
+        subtitle: h.id,
+        path,
+        sizeBytes: h.entryPoint?.sizeBytes ?? null,
+        source: "hub",
+        format: path ? "gguf" : null,
+        params: h.params,
+        hasWeights: h.hasWeights,
+        contextLengths: h.contextLengths,
+        minMemoryBytes: h.minMemoryBytes,
+      }),
+    );
   }
 
   for (const loc of local) {
     if (linkedPaths.has(loc.path)) continue;
-    models.push({
-      id: loc.path,
-      displayName: loc.relPath.split("/").pop() ?? loc.id,
-      subtitle: loc.relPath,
-      path: loc.path,
-      sizeBytes: loc.sizeBytes,
-      source: "file",
-      params: "",
-      hasWeights: true,
-      contextLengths: [],
-      minMemoryBytes: null,
-      loaded: isLoaded(loc.path, loc.path),
-    });
+    const cached = readGgufCacheEntry(loc.path);
+    models.push(
+      catalogEntry({
+        id: loc.path,
+        displayName: loc.relPath.split("/").pop() ?? loc.id,
+        subtitle: loc.relPath,
+        path: loc.path,
+        sizeBytes: loc.sizeBytes,
+        source: "file",
+        format: "gguf",
+        params: cached?.parameters ?? "",
+        hasWeights: true,
+        contextLengths: cached?.contextLength ? [cached.contextLength] : [],
+        minMemoryBytes: null,
+        architectures: cached ? [cached.arch] : undefined,
+        modelType: cached?.arch,
+      }),
+    );
+  }
+
+  const hfPaths = new Set<string>();
+  for (const m of hf) {
+    if (hfPaths.has(m.path)) continue;
+    hfPaths.add(m.path);
+    models.push(
+      catalogEntry({
+        id: m.id,
+        displayName: m.id.split("/").pop()?.replace(/-/g, " ") ?? m.id,
+        subtitle: m.relPath,
+        path: m.path,
+        sizeBytes: m.sizeBytes,
+        source: "huggingface",
+        format: m.format,
+        params: "",
+        hasWeights: true,
+        contextLengths: m.contextLength ? [m.contextLength] : [],
+        minMemoryBytes: null,
+        architectures: m.architectures,
+        modelType: m.architectures[0],
+      }),
+    );
   }
 
   models.sort((a, b) => {
@@ -261,10 +326,58 @@ export interface ResolvedModel {
   vision: string | null;
   minMemoryBytes: number | null;
   contextLengths: number[];
+  format: ModelFormat;
+  source: ModelSource;
+}
+
+/** Build a format/source-aware model reference for engine validation and estimation. */
+export function resolveModelRef(modelIdOrPath: string): ModelRef {
+  if (modelIdOrPath.endsWith(".gguf")) {
+    const path = normalizeModelPath(toFsPath(modelIdOrPath));
+    return { id: path, format: "gguf", source: "local", path };
+  }
+
+  if (modelIdOrPath.startsWith("/")) {
+    const classified = classifyLocalModelPath(normalizeModelPath(toFsPath(modelIdOrPath)));
+    if (classified) {
+      return { id: classified.id, format: classified.format, source: "local", path: classified.path };
+    }
+    const path = normalizeModelPath(toFsPath(modelIdOrPath));
+    return { id: path, format: "gguf", source: "local", path };
+  }
+
+  const hfLocal = scanLocalHfModels().find(
+    (m) => m.id === modelIdOrPath || m.path === modelIdOrPath,
+  );
+  if (hfLocal) {
+    return {
+      id: hfLocal.id,
+      format: hfLocal.format,
+      source: "local",
+      path: hfLocal.path,
+    };
+  }
+
+  if (isHfRepoId(modelIdOrPath)) {
+    return {
+      id: modelIdOrPath,
+      format: "safetensors",
+      source: "huggingface",
+      path: modelIdOrPath,
+    };
+  }
+
+  const resolved = resolveModelPath(modelIdOrPath);
+  return {
+    id: resolved.modelId,
+    format: "gguf",
+    source: "local",
+    path: resolved.path,
+  };
 }
 
 export function resolveModelPath(modelIdOrPath: string): ResolvedModel {
-  if (modelIdOrPath.endsWith(".gguf") || modelIdOrPath.startsWith("/")) {
+  if (modelIdOrPath.endsWith(".gguf")) {
     const path = normalizeModelPath(toFsPath(modelIdOrPath));
     if (!existsSync(path)) throw new Error(`File not found: ${path}`);
     const mm = findMmproj(join(path, ".."), path);
@@ -274,8 +387,40 @@ export function resolveModelPath(modelIdOrPath: string): ResolvedModel {
       vision: mm ? normalizeModelPath(mm) : null,
       minMemoryBytes: null,
       contextLengths: [],
+      format: "gguf",
+      source: "local",
     };
   }
+
+  if (modelIdOrPath.startsWith("/")) {
+    const classified = classifyLocalModelPath(normalizeModelPath(toFsPath(modelIdOrPath)));
+    if (classified) {
+      const hf = scanLocalHfModels().find((m) => m.path === classified.path);
+      const ctx = hf?.contextLength ? [hf.contextLength] : [];
+      return {
+        modelId: classified.id,
+        path: classified.path,
+        vision: null,
+        minMemoryBytes: null,
+        contextLengths: ctx,
+        format: classified.format,
+        source: "local",
+      };
+    }
+    const path = normalizeModelPath(toFsPath(modelIdOrPath));
+    if (!existsSync(path)) throw new Error(`File not found: ${path}`);
+    const mm = findMmproj(join(path, ".."), path);
+    return {
+      modelId: path,
+      path,
+      vision: mm ? normalizeModelPath(mm) : null,
+      minMemoryBytes: null,
+      contextLengths: [],
+      format: "gguf",
+      source: "local",
+    };
+  }
+
   const hub = scanHubModels();
   const local = scanLocalGguf();
   linkHubToLocal(hub, local);
@@ -287,6 +432,20 @@ export function resolveModelPath(modelIdOrPath: string): ResolvedModel {
       vision: h.visionAdapter?.path ? normalizeModelPath(toFsPath(h.visionAdapter.path)) : null,
       minMemoryBytes: h.minMemoryBytes,
       contextLengths: h.contextLengths,
+      format: "gguf",
+      source: "local",
+    };
+  }
+  const hf = scanLocalHfModels().find((m) => m.id === modelIdOrPath || m.path === modelIdOrPath);
+  if (hf) {
+    return {
+      modelId: hf.id,
+      path: normalizeModelPath(hf.path),
+      vision: null,
+      minMemoryBytes: null,
+      contextLengths: hf.contextLength ? [hf.contextLength] : [],
+      format: hf.format,
+      source: "local",
     };
   }
   const loc = local.find((m) => m.id === modelIdOrPath || m.path === modelIdOrPath);
@@ -297,6 +456,19 @@ export function resolveModelPath(modelIdOrPath: string): ResolvedModel {
       vision: loc.visionPath ? normalizeModelPath(loc.visionPath) : null,
       minMemoryBytes: null,
       contextLengths: [],
+      format: "gguf",
+      source: "local",
+    };
+  }
+  if (isHfRepoId(modelIdOrPath)) {
+    return {
+      modelId: modelIdOrPath,
+      path: modelIdOrPath,
+      vision: null,
+      minMemoryBytes: null,
+      contextLengths: [],
+      format: "safetensors",
+      source: "huggingface",
     };
   }
   throw new Error(`Model not found: ${modelIdOrPath}`);

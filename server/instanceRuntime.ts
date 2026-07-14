@@ -3,9 +3,10 @@ import { existsSync } from "fs";
 import { filterLogLines, parseLastSpeedTps, parseLoadProgress } from "../electron/lib/serverLogParse";
 import { loadServerConfig, serverEndpoints } from "../electron/lib/serverConfig";
 import { generationTracker } from "../electron/lib/generation";
-import { LOAD_DEFAULTS } from "../electron/lib/localMeta";
-import { normalizeModelPath, toContainerModelPath } from "../electron/lib/modelPaths";
-import { effectiveGpuLayers } from "../electron/lib/vram";
+import { normalizeModelPath } from "../electron/lib/modelPaths";
+import { resolveModelRef } from "../electron/lib/models";
+import { getEngine } from "../engines";
+import { chatTemplateSupportsReasoning } from "../shared/reasoning";
 import type { LoadedModelState, ServerDefinition, ServerInstanceStatus } from "../shared/types";
 import {
   ensureServerRuntime,
@@ -16,18 +17,49 @@ import {
   stopServerRuntime,
 } from "./serverRuntime";
 import { isMetalBackend } from "./hostAgent";
-import {
-  clearLoadEnv,
-  llamaConnectHost,
-  relativeVisibleDevices,
-  writeLoadEnv,
-} from "./containerUtils";
+import { clearLoadEnv, llamaConnectHost, writeLoadEnv } from "./containerUtils";
+import { resolveInferenceModel } from "../electron/lib/chatInfer";
 
 function authHeaders(apiKey: string | null): Record<string, string> {
   return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }
 
-async function probeLlamaReady(base: string, apiKey: string | null): Promise<boolean> {
+type ServerPropsProbe = {
+  supportsReasoning: boolean | null;
+  nCtx: number | null;
+};
+
+async function probeServerProps(
+  base: string,
+  apiKey: string | null,
+): Promise<ServerPropsProbe> {
+  try {
+    const res = await fetch(`${base}/props`, {
+      signal: AbortSignal.timeout(3000),
+      headers: authHeaders(apiKey),
+    });
+    if (!res.ok) return { supportsReasoning: null, nCtx: null };
+    const body = (await res.json()) as {
+      chat_template?: string;
+      chat_template_caps?: Record<string, unknown>;
+      default_generation_settings?: { n_ctx?: number };
+    };
+    const supportsReasoning = chatTemplateSupportsReasoning(
+      body.chat_template,
+      body.chat_template_caps,
+    );
+    const nCtx =
+      typeof body.default_generation_settings?.n_ctx === "number" &&
+      body.default_generation_settings.n_ctx > 0
+        ? body.default_generation_settings.n_ctx
+        : null;
+    return { supportsReasoning, nCtx };
+  } catch {
+    return { supportsReasoning: null, nCtx: null };
+  }
+}
+
+async function probeServerReady(base: string, apiKey: string | null): Promise<boolean> {
   const headers = authHeaders(apiKey);
   try {
     const health = await fetch(`${base}/health`, {
@@ -53,13 +85,21 @@ async function probeLlamaReady(base: string, apiKey: string | null): Promise<boo
 }
 
 async function waitForModelReady(
+  def: ServerDefinition,
   base: string,
   apiKey: string | null,
   appendLog: (line: string) => void,
   fetchLogs: () => Promise<string[]>,
 ): Promise<void> {
-  const deadline = Date.now() + 300_000;
+  const engine = getEngine(def.engine);
+  const spec = engine.readiness(def);
+  const deadline = Date.now() + spec.timeoutMs;
   const seen = new Set<string>();
+  const pollMs = spec.healthProbe
+    ? (spec.healthProbeIntervalMs ?? 10_000)
+    : 1_000;
+  let lastHealthProbe = 0;
+
   while (Date.now() < deadline) {
     const dockerLogs = await fetchLogs();
     for (const line of dockerLogs) {
@@ -67,38 +107,38 @@ async function waitForModelReady(
       seen.add(line);
       appendLog(line);
     }
-    if (
-      dockerLogs.some(
-        (l) =>
-          l.includes("model loaded") ||
-          l.includes("server is listening") ||
-          l.includes("HTTP server is listening") ||
-          l.includes("HTTP server listening") ||
-          l.includes("llama-server: model file not found"),
-      )
-    ) {
-      if (dockerLogs.some((l) => l.includes("model file not found"))) {
-        throw new Error("Model file not found — check MODEL_PATH and models mount");
+
+    for (const err of spec.errorMarkers) {
+      if (dockerLogs.some((l) => l.includes(err.match))) {
+        throw new Error(err.message);
       }
-      if (await probeLlamaReady(base, apiKey)) return;
     }
 
-    if (await probeLlamaReady(base, apiKey)) return;
+    const now = Date.now();
+    if (now - lastHealthProbe >= pollMs) {
+      lastHealthProbe = now;
+      if (await probeServerReady(base, apiKey)) return;
+    }
 
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1_000));
   }
-  throw new Error("Timed out waiting for model load (5 min). Check server logs.");
+  throw new Error(`Timed out waiting for model load (${Math.round(spec.timeoutMs / 60_000)} min). Check server logs.`);
 }
 
-/** Per-container llama-server runtime. */
+/** Per-container inference server runtime. */
 export class InstanceRuntime {
   private state: LoadedModelState | null = null;
   private loadStartedAt: number | null = null;
   private lastLoadError: string | null = null;
   private loadPromise: Promise<LoadedModelState> | null = null;
   private logs = new ServerLogBuffer();
-  /** Latest raw docker logs from the llama-server container. */
+  /** Latest raw docker logs from the inference container. */
   private serverLogLines: string[] = [];
+  /** OpenAI model id for chat/completions (vLLM: from /v1/models; llama.cpp: local). */
+  private inferenceModel: string | null = null;
+  /** Cached from GET /props after a successful load. */
+  private supportsReasoning: boolean | null = null;
+  private nCtx: number | null = null;
 
   constructor(private def: ServerDefinition) {}
 
@@ -130,6 +170,32 @@ export class InstanceRuntime {
     return this.def.apiKey ?? null;
   }
 
+  getInferenceModel(): string {
+    if (this.inferenceModel) return this.inferenceModel;
+    if ((this.def.engine ?? "llamacpp") === "llamacpp") return "local";
+    throw new Error("Inference model not resolved — reload the server");
+  }
+
+  async ensureInferenceModel(): Promise<string> {
+    if (this.inferenceModel) return this.inferenceModel;
+    if ((this.def.engine ?? "llamacpp") === "llamacpp") {
+      this.inferenceModel = "local";
+      return "local";
+    }
+    if (!this.isRunning()) throw new Error("No model loaded on selected server");
+    await this.refreshInferenceModel();
+    return this.inferenceModel!;
+  }
+
+  private async refreshInferenceModel(): Promise<void> {
+    this.inferenceModel = await resolveInferenceModel(
+      this.getHost(),
+      this.getPort(),
+      this.getApiKey(),
+      this.def.engine ?? "llamacpp",
+    );
+  }
+
   markActivity(): void {
     /* TTL per-instance could be added later */
   }
@@ -138,7 +204,10 @@ export class InstanceRuntime {
     this.lastLoadError = null;
     this.loadStartedAt = Date.now();
     this.logs.setLimit(loadServerConfig().logLinesLimit);
-    this.logs.append(`[revolver] starting server "${this.def.name}" (${this.def.backend})`);
+    const engine = getEngine(this.def.engine);
+    this.logs.append(
+      `[revolver] starting server "${this.def.name}" engine=${engine.id} backend=${this.def.backend}`,
+    );
     this.loadPromise = this.loadInner(opts?.force)
       .catch((e) => {
         const message = e instanceof Error ? e.message : String(e);
@@ -153,14 +222,14 @@ export class InstanceRuntime {
     return this.status();
   }
 
-  /** Verify llama is reachable; reload if backend thinks running but process is gone. */
+  /** Verify server is reachable; reload if backend thinks running but process is gone. */
   async ensureReady(): Promise<void> {
     await this.syncMetalHealth();
     const base = `http://${this.getHost()}:${this.def.hostPort}`;
-    if (this.isRunning() && (await probeLlamaReady(base, this.getApiKey()))) return;
+    if (this.isRunning() && (await probeServerReady(base, this.getApiKey()))) return;
     if (this.loadPromise) {
       await this.loadPromise;
-      if (this.isRunning() && (await probeLlamaReady(base, this.getApiKey()))) return;
+      if (this.isRunning() && (await probeServerReady(base, this.getApiKey()))) return;
     }
     if (!this.def.modelPath) throw new Error("No model loaded on selected server");
     this.state = null;
@@ -170,68 +239,59 @@ export class InstanceRuntime {
   private async syncMetalHealth(): Promise<void> {
     if (!isMetalBackend(this.def) || !this.state?.running) return;
     const base = `http://${this.getHost()}:${this.def.hostPort}`;
-    if (await probeLlamaReady(base, this.getApiKey())) return;
+    if (await probeServerReady(base, this.getApiKey())) return;
     this.state = null;
-    this.lastLoadError = "llama-server unreachable — reload required";
-    this.logs.append("[revolver] llama-server unreachable — marked idle");
+    this.lastLoadError = "inference server unreachable — reload required";
+    this.logs.append("[revolver] inference server unreachable — marked idle");
   }
 
   private async loadInner(_force?: boolean): Promise<LoadedModelState> {
     const def = this.def;
-    if (!def.modelPath) {
+    const engine = getEngine(def.engine);
+    const modelRef = resolveModelRef(def.modelId);
+    const compatErr = engine.validateModel(modelRef);
+    if (compatErr) {
+      this.loadStartedAt = null;
+      throw new Error(compatErr);
+    }
+    if (!engine.supportsBackend(def.backend)) {
+      this.loadStartedAt = null;
+      throw new Error(`${engine.label} does not support backend ${def.backend}`);
+    }
+
+    if (!def.modelPath && modelRef.source === "local") {
       this.loadStartedAt = null;
       throw new Error("modelPath missing");
     }
 
-    const modelPath = normalizeModelPath(def.modelPath);
-    if (!existsSync(modelPath)) {
-      this.loadStartedAt = null;
-      throw new Error(`Model not found: ${def.modelPath} (resolved ${modelPath})`);
+    if (modelRef.source === "local") {
+      const modelPath = normalizeModelPath(def.modelPath);
+      if (!existsSync(modelPath)) {
+        this.loadStartedAt = null;
+        throw new Error(`Model not found: ${def.modelPath} (resolved ${modelPath})`);
+      }
     }
-    const gpuLayers = effectiveGpuLayers(def.backend, def.nGpuLayers);
 
     await ensureServerRuntime(def);
 
-    this.logs.append(`[revolver] loading server "${def.name}" (${def.backend})`);
-    this.logs.append(`[revolver] model=${modelPath} ctx=${def.contextLength} gpu_layers=${gpuLayers}`);
+    const plan = engine.buildLoadEnv({
+      ...def,
+      engineConfig: {
+        ...def.engineConfig,
+        modelFormat: modelRef.format,
+        modelSource: modelRef.source,
+      },
+    });
+    for (const line of plan.logLines) this.logs.append(line);
     if (isMetalBackend(def)) {
       this.logs.append(`[revolver] metal host-agent → port ${def.hostPort}`);
-    } else {
-      this.logs.append(`[revolver] container path=${toContainerModelPath(modelPath)}`);
     }
     if (def.gpuDevices.length) {
-      this.logs.append(
-        `[revolver] GPUs=${def.gpuDevices.join(",")} mode=${def.gpuMode}`,
-      );
+      this.logs.append(`[revolver] GPUs=${def.gpuDevices.join(",")} mode=${def.gpuMode}`);
     }
 
-    // KV cache quantization (anything other than f16) requires Flash Attention,
-    // otherwise llama.cpp dequantizes every step and runs slower. Force `-fa on`
-    // when quantizing; leave it on `auto` (llama.cpp default) for plain f16.
-    const kvDtype = (def.kvCacheDtype || "f16").toLowerCase();
-    const quantKv = kvDtype !== "f16";
-
-    writeLoadEnv(def.id, {
-      MODEL_PATH: modelPath,
-      CTX_SIZE: def.contextLength,
-      N_GPU_LAYERS: gpuLayers,
-      LLAMA_HOST: "0.0.0.0",
-      LLAMA_PORT: 8080,
-      BACKEND: def.backend,
-      MMPROJ_PATH: def.mmprojPath ? normalizeModelPath(def.mmprojPath) : undefined,
-      FLASH_ATTN: quantKv ? "on" : "auto",
-      CACHE_TYPE_K: quantKv ? kvDtype : undefined,
-      CACHE_TYPE_V: quantKv ? kvDtype : undefined,
-      // llama-server defaults (n_parallel=4, kv_unified=true, thinking=0).
-      N_PARALLEL: LOAD_DEFAULTS.maxParallelPredictions,
-      KV_UNIFIED: LOAD_DEFAULTS.useUnifiedKvCache ? "1" : undefined,
-      // llama.cpp defaults to reasoning=auto, which enables `<|think|>` for gemma4
-      // and burns tokens before the visible reply. Load with thinking=0.
-      REASONING: "off",
-      // Container-relative indices: `--gpus device=` already isolates the host
-      // GPUs and renumbers them from 0, so host indices would point at nothing.
-      CUDA_VISIBLE_DEVICES: def.gpuDevices.length ? relativeVisibleDevices(def) : undefined,
-    });
+    const spec = engine.containerSpec(def);
+    writeLoadEnv(spec.envFileName, plan.env);
 
     try {
       await restartServerRuntime(def);
@@ -241,10 +301,10 @@ export class InstanceRuntime {
     }
 
     const since = await getServerStartedAt(def);
-
     const base = `http://${this.getHost()}:${def.hostPort}`;
     try {
       await waitForModelReady(
+        def,
         base,
         this.getApiKey(),
         (line) => this.logs.append(line),
@@ -257,13 +317,27 @@ export class InstanceRuntime {
     }
 
     this.logs.append(`[revolver] ready on ${base}`);
-
+    await this.refreshInferenceModel();
+    this.logs.append(`[revolver] chat model=${this.inferenceModel}`);
+    await this.refreshServerProps(base);
     await this.refreshServerLogs();
 
     this.state = this.buildState();
     this.loadStartedAt = null;
     this.lastLoadError = null;
     return this.state;
+  }
+
+  private async refreshServerProps(base?: string): Promise<void> {
+    const url = base ?? `http://${this.getHost()}:${this.def.hostPort}`;
+    const props = await probeServerProps(url, this.getApiKey());
+    this.supportsReasoning = props.supportsReasoning;
+    this.nCtx = props.nCtx;
+    if (props.supportsReasoning != null) {
+      this.logs.append(
+        `[revolver] reasoning=${props.supportsReasoning ? "supported" : "not detected"} (from /props)`,
+      );
+    }
   }
 
   private buildState(startedAt: string = new Date().toISOString()): LoadedModelState {
@@ -290,20 +364,17 @@ export class InstanceRuntime {
     };
   }
 
-  /**
-   * Reconstruct running state from a live container on boot. A container can be
-   * up but idle (no model env / still loading), so we only mark loaded when its
-   * `/health` reports ready — otherwise we leave it idle.
-   */
   async adopt(): Promise<void> {
     if (!this.def.modelPath || this.state?.running) return;
 
     if (isMetalBackend(this.def)) {
       const base = `http://${this.getHost()}:${this.def.hostPort}`;
       try {
-        if (await probeLlamaReady(base, this.getApiKey())) {
+        if (await probeServerReady(base, this.getApiKey())) {
           const startedAt = (await getServerStartedAt(this.def)) ?? undefined;
           this.state = this.buildState(startedAt);
+          await this.refreshInferenceModel();
+          await this.refreshServerProps(base);
           this.logs.append(`[revolver] adopted running server "${this.def.name}" on ${base}`);
         }
       } catch {
@@ -322,9 +393,11 @@ export class InstanceRuntime {
 
     const base = `http://${this.getHost()}:${this.def.hostPort}`;
     try {
-      if (await probeLlamaReady(base, this.getApiKey())) {
+      if (await probeServerReady(base, this.getApiKey())) {
         const startedAt = (await getServerStartedAt(this.def)) ?? undefined;
         this.state = this.buildState(startedAt);
+        await this.refreshInferenceModel();
+        await this.refreshServerProps(base);
         this.logs.append(`[revolver] adopted running server "${this.def.name}" on ${base}`);
       }
     } catch {
@@ -333,10 +406,15 @@ export class InstanceRuntime {
   }
 
   async unload(): Promise<void> {
-    clearLoadEnv(this.def.id);
+    const engine = getEngine(this.def.engine);
+    const spec = engine.containerSpec(this.def);
+    clearLoadEnv(spec.envFileName, engine.idleLoadEnv());
     this.state = null;
     this.loadStartedAt = null;
     this.lastLoadError = null;
+    this.inferenceModel = null;
+    this.supportsReasoning = null;
+    this.nCtx = null;
     this.logs.append(`[revolver] stopping server "${this.def.name}"`);
     await stopServerRuntime(this.def);
   }
@@ -346,9 +424,12 @@ export class InstanceRuntime {
     const since = await getServerStartedAt(this.def);
     this.serverLogLines = await fetchServerLogs(this.def, { tail, since });
     await this.syncMetalHealth();
+    // Retry /props once if we never got a reasoning signal (e.g. race at load).
+    if (this.isRunning() && this.supportsReasoning == null) {
+      await this.refreshServerProps();
+    }
   }
 
-  /** @deprecated use refreshServerLogs — kept for load-time log merge */
   async refreshLogs(): Promise<void> {
     await this.refreshServerLogs();
     for (const line of this.serverLogLines.slice(-50)) {
@@ -365,9 +446,12 @@ export class InstanceRuntime {
     const cfg = loadServerConfig();
     const running = this.isRunning();
     const lines = this.logs.getLines();
+    const loading = this.loadStartedAt != null;
     const containerLogs = lines.filter((l) => l.startsWith("[revolver]"));
-    const serverLogs = this.serverLogLines;
-    const logSource = serverLogs.length ? serverLogs : lines;
+    const serverLogs = loading
+      ? lines.filter((l) => !l.startsWith("[revolver]"))
+      : this.serverLogLines;
+    const logSource = loading || !this.serverLogLines.length ? lines : this.serverLogLines;
     const host = this.getHost();
     const port = this.def.hostPort;
     const base = `http://${host}:${port}`;
@@ -392,7 +476,7 @@ export class InstanceRuntime {
       loadError: this.lastLoadError,
       loadProgress:
         loadPhase === "loading"
-          ? parseLoadProgress(logSource, true, "loading", this.loadStartedAt)
+          ? parseLoadProgress(logSource, true, "loading", this.loadStartedAt, this.def.engine)
           : null,
       lastSpeedTps: parseLastSpeedTps(logSource),
       port,
@@ -404,6 +488,8 @@ export class InstanceRuntime {
       containerLogs,
       serverLogs,
       generation,
+      supportsReasoning: running ? this.supportsReasoning : null,
+      nCtx: running ? this.nCtx : null,
     };
   }
 }

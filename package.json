@@ -20,7 +20,8 @@
     "host-agent": "mac/scripts/run-host-agent.sh",
     "host-agent:stop": "mac/scripts/stop-host-agent.sh",
     "host-open-agent": "scripts/run-host-open-agent.sh",
-    "host-open-agent:stop": "scripts/stop-host-open-agent.sh"
+    "host-open-agent:stop": "scripts/stop-host-open-agent.sh",
+    "test": "tsx --test engines/index.test.ts shared/reasoning.test.ts"
   },
   "build": {
     "appId": "ai.revolver.app",

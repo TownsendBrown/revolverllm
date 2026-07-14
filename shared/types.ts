@@ -29,7 +29,11 @@ export interface CatalogModel {
   subtitle: string;
   path: string | null;
   sizeBytes: number | null;
-  source: "hub" | "file";
+  source: "hub" | "file" | "huggingface";
+  /** Weight format when known (drives engine compatibility filtering). */
+  format: ModelFormat | null;
+  /** Engines that can run this model. */
+  compatibleEngines: EngineId[];
   params: string;
   hasWeights: boolean;
   contextLengths: number[];
@@ -124,9 +128,56 @@ export interface MonitorSnapshot {
 export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu" | "metal";
 export type GpuMode = "single" | "combined";
 
+/** Inference implementation (what runs the model). Orthogonal to InferenceBackend (how it executes). */
+export type EngineId = "llamacpp" | "vllm" | "vllm-legacy";
+
+export type ModelFormat = "gguf" | "safetensors" | "awq" | "gptq";
+export type ModelSource = "local" | "huggingface";
+
+export interface EngineCapabilities {
+  formats: ModelFormat[];
+  sources: ModelSource[];
+  supportsMetal: boolean;
+  supportsCUDA: boolean;
+  supportsROCm: boolean;
+  supportsVulkan: boolean;
+  supportsCPU: boolean;
+  supportsMultiGPU: boolean;
+  api: "openai";
+}
+
+export interface EngineConfigOption {
+  value: string;
+  label: string;
+}
+
+/** Declarative engine-specific setting, rendered dynamically by the UI. */
+export interface EngineConfigField {
+  key: string;
+  label: string;
+  type: "number" | "select" | "boolean" | "text";
+  default: string | number | boolean;
+  options?: EngineConfigOption[];
+  hint?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+/** Serializable engine description exposed to the frontend. */
+export interface EngineInfo {
+  id: EngineId;
+  label: string;
+  description: string;
+  capabilities: EngineCapabilities;
+  configFields: EngineConfigField[];
+}
+
 export interface ServerDefinition {
   id: string;
   name: string;
+  /** Inference implementation. Omitted in persisted defs → llamacpp. */
+  engine?: EngineId;
   backend: InferenceBackend;
   gpuDevices: number[];
   gpuMode: GpuMode;
@@ -136,6 +187,8 @@ export interface ServerDefinition {
   contextLength: number;
   nGpuLayers: number;
   kvCacheDtype: string;
+  /** Engine-specific settings (e.g. vLLM gpu_memory_utilization). */
+  engineConfig?: Record<string, unknown>;
   hostPort: number;
   /** Optional API key required by this container's remote endpoint. null = open (default). */
   apiKey: string | null;
@@ -145,6 +198,7 @@ export interface ServerDefinition {
 
 export interface CreateServerRequest {
   name?: string;
+  engine?: EngineId;
   backend: InferenceBackend;
   gpuDevices: number[];
   gpuMode?: GpuMode;
@@ -152,6 +206,7 @@ export interface CreateServerRequest {
   contextLength: number;
   nGpuLayers: number;
   kvCacheDtype?: string;
+  engineConfig?: Record<string, unknown>;
   apiKey?: string | null;
   force?: boolean;
 }
@@ -196,6 +251,13 @@ export interface ServerInstanceStatus {
   /** Raw llama-server output from `docker logs` (timing, slots, inference). */
   serverLogs: string[];
   generation: GenerationState | null;
+  /**
+   * Whether the loaded chat template supports thinking / reasoning.
+   * Detected from `GET /props` when available; null = unknown (UI may fall back).
+   */
+  supportsReasoning: boolean | null;
+  /** Context window from /props `n_ctx` when known; else null (use definition.contextLength). */
+  nCtx: number | null;
 }
 
 export interface ServersOverview extends ServerStatus {
@@ -359,12 +421,20 @@ export interface ChatMessage {
   conversationId: string;
   role: "user" | "assistant" | "system";
   content: string;
+  /** Model reasoning / chain-of-thought when emitted separately from the reply. */
+  reasoning: string | null;
   createdAt: string;
   promptTokens: number | null;
   completionTokens: number | null;
   tokensPerSecond: number | null;
   promptTokensPerSecond: number | null;
   ttftMs: number | null;
+}
+
+/** Incremental stream chunk from chat completions (content and/or reasoning). */
+export interface StreamDelta {
+  content?: string;
+  reasoning?: string;
 }
 
 export interface ConversationMeta {
@@ -385,7 +455,9 @@ export interface ConversationDetail {
 
 export interface SendMessageOptions {
   serverId?: string | null;
-  onDelta?: (delta: string) => void;
+  /** When set, request enables/disables model thinking for this turn. */
+  enableThinking?: boolean;
+  onDelta?: (delta: StreamDelta) => void;
   signal?: AbortSignal;
 }
 
@@ -405,14 +477,18 @@ export interface RevolverApi {
     models: CatalogModel[];
     paths: { hub: string; downloads: string; root: string };
   }>;
+  getEngines(): Promise<EngineInfo[]>;
   estimateVram(opts: {
     modelId?: string;
     modelPath?: string;
+    engine?: EngineId;
     contextLength: number;
     nGpuLayers: number;
     kvCacheDtype?: string;
     gpuDeviceCount?: number;
     gpuDevices?: number[];
+    backend?: string | null;
+    engineConfig?: Record<string, unknown>;
   }): Promise<{
     estimate: VramEstimate;
     contextLength: number;
@@ -462,6 +538,6 @@ export interface RevolverApi {
 
 declare global {
   interface Window {
-    revolver: RevolverApi;
+    revolver?: RevolverApi;
   }
 }

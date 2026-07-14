@@ -8,6 +8,9 @@ export type {
   ConversationDetail,
   ConversationMeta,
   CreateServerRequest,
+  EngineConfigField,
+  EngineId,
+  EngineInfo,
   GpuInfo,
   GpuMode,
   HubModel,
@@ -26,15 +29,10 @@ export type {
   ServerLoadPhase,
   ServerStatus,
   SendMessageOptions,
+  StreamDelta,
   SystemInfo,
   VramEstimate,
 } from "../shared/types";
-
-declare global {
-  interface Window {
-    revolver?: RevolverApi;
-  }
-}
 
 export const api: RevolverApi =
   typeof window !== "undefined" && window.revolver ? window.revolver : createWebApi();

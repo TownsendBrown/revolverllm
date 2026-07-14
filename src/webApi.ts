@@ -1,4 +1,4 @@
-import type { RevolverApi, SendMessageResult } from "../shared/types";
+import type { RevolverApi, SendMessageResult, StreamDelta } from "../shared/types";
 
 async function post<T>(path: string, body: unknown = {}): Promise<T> {
   const res = await fetch(path, {
@@ -44,7 +44,7 @@ async function get<T>(path: string): Promise<T> {
 }
 
 function parseSsePayload(part: string): {
-  delta?: string;
+  delta?: StreamDelta;
   done?: boolean;
   result?: SendMessageResult;
   error?: string;
@@ -53,7 +53,7 @@ function parseSsePayload(part: string): {
   if (!line) return null;
   try {
     return JSON.parse(line.slice(5).trim()) as {
-      delta?: string;
+      delta?: StreamDelta;
       done?: boolean;
       result?: SendMessageResult;
       error?: string;
@@ -80,7 +80,8 @@ async function streamSendMessage(
   id: string,
   content: string,
   serverId: string | null | undefined,
-  onDelta: (delta: string) => void,
+  enableThinking: boolean | undefined,
+  onDelta: (delta: StreamDelta) => void,
   signal?: AbortSignal,
 ): Promise<SendMessageResult> {
   let res: Response;
@@ -88,7 +89,7 @@ async function streamSendMessage(
     res = await fetch(`${base}/conversations/${id}/messages/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ content, serverId }),
+      body: JSON.stringify({ content, serverId, enableThinking }),
       signal,
     });
   } catch (e) {
@@ -155,6 +156,7 @@ export function createWebApi(base = "/api"): RevolverApi {
     getPlatform: () => get(p("/platform")),
     getMonitor: () => get(p("/monitor")),
     getModels: () => get(p("/models")),
+    getEngines: () => get(p("/engines")),
     estimateVram: (opts) => post(p("/vram/estimate"), opts),
     loadModel: (opts) => post(p("/models/load"), opts),
     loadModelFromPath: (opts) => post(p("/models/load-path"), opts),
@@ -181,9 +183,21 @@ export function createWebApi(base = "/api"): RevolverApi {
     deleteConversation: (id) => del(p(`/conversations/${id}`)),
     sendMessage: (id, content, opts) => {
       if (opts?.onDelta) {
-        return streamSendMessage(base, id, content, opts.serverId, opts.onDelta, opts.signal);
+        return streamSendMessage(
+          base,
+          id,
+          content,
+          opts.serverId,
+          opts.enableThinking,
+          opts.onDelta,
+          opts.signal,
+        );
       }
-      return post(p(`/conversations/${id}/messages`), { content, serverId: opts?.serverId });
+      return post(p(`/conversations/${id}/messages`), {
+        content,
+        serverId: opts?.serverId,
+        enableThinking: opts?.enableThinking,
+      });
     },
     openPath: (path) => post(p("/open-path"), { path }),
   };

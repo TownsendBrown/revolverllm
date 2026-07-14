@@ -104,7 +104,8 @@ export function writeLoadEnv(def: ServerDefinition): void {
     LLAMA_HOST: "0.0.0.0",
     LLAMA_PORT: 8080,
     BACKEND: "metal",
-    REASONING: "off",
+    REASONING: "auto",
+    REASONING_FORMAT: "deepseek",
     N_PARALLEL: 4,
     KV_UNIFIED: "1",
   };

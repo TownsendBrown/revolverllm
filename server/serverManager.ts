@@ -5,12 +5,14 @@ import {
   removeServerDefinition,
   saveServerDefinition,
 } from "../electron/lib/serversStore";
-import { resolveModelPath } from "../electron/lib/models";
+import { resolveModelPath, resolveModelRef } from "../electron/lib/models";
 import { clampContextLength } from "../electron/lib/contextLength";
 import { effectiveGpuLayers } from "../electron/lib/vram";
 import { loadRuntimeConfig } from "../electron/lib/runtimeConfig";
+import { DEFAULT_ENGINE, getEngine } from "../engines";
 import type {
   CreateServerRequest,
+  EngineId,
   GpuMode,
   InferenceBackend,
   LoadedModelState,
@@ -88,7 +90,20 @@ export const serverManager = {
   },
 
   async createAndStart(req: CreateServerRequest): Promise<ServerInstanceStatus> {
+    const modelRef = resolveModelRef(req.modelId);
     const resolved = resolveModelPath(req.modelId);
+    const engineId: EngineId = req.engine ?? DEFAULT_ENGINE;
+    const engine = getEngine(engineId);
+
+    const compatErr = engine.validateModel(modelRef);
+    if (compatErr) throw new Error(compatErr);
+    if (!engine.supportsBackend(req.backend)) {
+      throw new Error(`${engine.label} does not support backend ${req.backend}`);
+    }
+    if (req.backend === "metal" && engineId !== "llamacpp") {
+      throw new Error("Metal backend only supports llama.cpp");
+    }
+
     const ctx = clampContextLength(req.contextLength);
     const rtCfg = loadRuntimeConfig();
 
@@ -101,10 +116,11 @@ export const serverManager = {
 
     const name =
       req.name?.trim() ||
-      `${resolved.modelId.split("/").pop() ?? "model"} (${req.backend})`;
+      `${resolved.modelId.split("/").pop() ?? "model"} (${engine.label}/${req.backend})`;
 
     const def = createServerDefinition({
       name,
+      engine: engineId,
       backend: req.backend,
       gpuDevices: effectiveGpus,
       gpuMode,
@@ -114,6 +130,7 @@ export const serverManager = {
       contextLength: ctx,
       nGpuLayers: effectiveGpuLayers(req.backend, req.nGpuLayers ?? rtCfg.nGpuLayers),
       kvCacheDtype: req.kvCacheDtype ?? rtCfg.kvCacheDtype,
+      engineConfig: req.engineConfig,
       apiKey: req.apiKey ?? null,
     });
 
@@ -168,9 +185,9 @@ export const serverManager = {
     await rt.ensureReady();
   },
 
-  inferTarget(
+  async inferTarget(
     serverId?: string | null,
-  ): { host: string; port: number; apiKey: string | null; markActivity: () => void } {
+  ): Promise<{ host: string; port: number; model: string; apiKey: string | null; markActivity: () => void }> {
     let rt: InstanceRuntime | null = null;
     if (serverId) rt = runtimeFor(serverId);
     if (!rt) {
@@ -182,11 +199,11 @@ export const serverManager = {
       }
     }
     if (!rt?.isRunning()) throw new Error("No model loaded on selected server");
+    const model = await rt.ensureInferenceModel();
     return {
       host: rt.getHost(),
       port: rt.getPort(),
-      // Local test-chat authenticates with the container's own key when one is set,
-      // so testing keeps working even on key-protected endpoints.
+      model,
       apiKey: rt.getApiKey(),
       markActivity: () => rt!.markActivity(),
     };

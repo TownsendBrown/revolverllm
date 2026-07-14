@@ -1,5 +1,5 @@
 {
-  "modelsDir": "/Users/monkeyland/Downloads/Revolver-main/models",
-  "hubModelsDir": "/Users/monkeyland/Library/Application Support/Revolver/hub/models",
-  "localRoot": "/Users/monkeyland/Library/Application Support/Revolver"
+  "modelsDir": "/home/ape/models",
+  "hubModelsDir": "/home/ape/models/hub",
+  "localRoot": "/home/ape/models/.revolver"
 }

@@ -9,6 +9,7 @@ const api: RevolverApi = {
   getPlatform: () => ipcRenderer.invoke("revolver:getPlatform"),
   getMonitor: () => ipcRenderer.invoke("revolver:getMonitor"),
   getModels: () => ipcRenderer.invoke("revolver:getModels"),
+  getEngines: () => ipcRenderer.invoke("revolver:getEngines"),
   estimateVram: (opts) => ipcRenderer.invoke("revolver:estimateVram", opts),
   loadModel: (opts) => ipcRenderer.invoke("revolver:loadModel", opts),
   loadModelFromPath: (opts) => ipcRenderer.invoke("revolver:loadModelFromPath", opts),
@@ -38,10 +39,14 @@ const api: RevolverApi = {
         id,
         content,
         serverId: opts?.serverId,
+        enableThinking: opts?.enableThinking,
       });
     }
     const requestId = crypto.randomUUID();
-    const onDeltaEvent = (_e: unknown, data: { requestId: string; delta: string }) => {
+    const onDeltaEvent = (
+      _e: unknown,
+      data: { requestId: string; delta: { content?: string; reasoning?: string } },
+    ) => {
       if (data.requestId !== requestId) return;
       opts.onDelta!(data.delta);
     };
@@ -51,6 +56,7 @@ const api: RevolverApi = {
         id,
         content,
         serverId: opts.serverId,
+        enableThinking: opts.enableThinking,
         stream: true,
         requestId,
       })

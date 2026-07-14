@@ -58,6 +58,7 @@ app.whenReady().then(async () => {
   bindHandler("revolver:getPlatform", () => handlers.getPlatform());
   bindHandler("revolver:getMonitor", () => handlers.getMonitor());
   bindHandler("revolver:getModels", () => handlers.getModels());
+  bindHandler("revolver:getEngines", () => handlers.getEngines());
   bindHandler("revolver:getServerConfig", () => handlers.getServerConfig());
   bindHandler("revolver:setServerConfig", handlers.setServerConfig);
   bindHandler("revolver:getRuntimeConfig", () => handlers.getRuntimeConfig());
@@ -98,14 +99,21 @@ app.whenReady().then(async () => {
         serverId?: string | null;
         stream?: boolean;
         requestId?: string;
+        enableThinking?: boolean;
       },
     ) => {
       if (arg.stream && arg.requestId) {
-        return handlers.sendMessage(arg.id, arg.content, arg.serverId, (delta) => {
-          event.sender.send("revolver:streamDelta", { requestId: arg.requestId, delta });
-        });
+        return handlers.sendMessage(
+          arg.id,
+          arg.content,
+          arg.serverId,
+          (delta) => {
+            event.sender.send("revolver:streamDelta", { requestId: arg.requestId, delta });
+          },
+          arg.enableThinking,
+        );
       }
-      return handlers.sendMessage(arg.id, arg.content, arg.serverId);
+      return handlers.sendMessage(arg.id, arg.content, arg.serverId, undefined, arg.enableThinking);
     },
   );
 

@@ -4,6 +4,9 @@ import {
   api,
   type CatalogModel,
   type CreateServerRequest,
+  type EngineConfigField,
+  type EngineId,
+  type EngineInfo,
   type GpuInfo,
   type GpuMode,
   type InferenceBackend,
@@ -26,7 +29,7 @@ type Props = {
 };
 
 type View = "list" | "wizard" | "detail";
-type WizardStep = "backend" | "gpu" | "model" | "config" | "review";
+type WizardStep = "backend" | "gpu" | "model" | "engine" | "config" | "review";
 
 const DOCKER_GPU_BACKENDS = new Set<InferenceBackend>(["cuda", "rocm", "vulkan"]);
 
@@ -73,7 +76,65 @@ function formatSize(n: number) {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
+function renderEngineField(
+  field: EngineConfigField,
+  value: unknown,
+  onChange: (key: string, value: unknown) => void,
+) {
+  const id = `engine-${field.key}`;
+  if (field.type === "boolean") {
+    return (
+      <label key={field.key} className="check-row span-2">
+        <input
+          id={id}
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange(field.key, e.target.checked)}
+        />
+        {field.label}
+        {field.hint && <span className="field-hint">{field.hint}</span>}
+      </label>
+    );
+  }
+  if (field.type === "select") {
+    return (
+      <label key={field.key}>
+        {field.label}
+        <select
+          id={id}
+          value={String(value ?? field.default)}
+          onChange={(e) => onChange(field.key, e.target.value)}
+        >
+          {field.options?.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {field.hint && <span className="field-hint">{field.hint}</span>}
+      </label>
+    );
+  }
+  return (
+    <label key={field.key}>
+      {field.label}
+      <input
+        id={id}
+        type={field.type}
+        value={Number(value ?? field.default)}
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        onChange={(e) => onChange(field.key, Number(e.target.value))}
+      />
+      {field.hint && <span className="field-hint">{field.hint}</span>}
+    </label>
+  );
+}
+
 function modelKey(m: CatalogModel) {
+  // HF catalog entries use repo id; path is for display/mounting only.
+  if (m.source === "huggingface") return m.id;
   return m.path ?? m.id;
 }
 
@@ -107,6 +168,10 @@ export default function ServerPanel({
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedHasWeights, setSelectedHasWeights] = useState(false);
+  const [selectedModelFormat, setSelectedModelFormat] = useState<CatalogModel["format"]>(null);
+  const [engines, setEngines] = useState<EngineInfo[]>([]);
+  const [engine, setEngine] = useState<EngineId>("llamacpp");
+  const [engineConfig, setEngineConfig] = useState<Record<string, unknown>>({});
   const [serverName, setServerName] = useState("");
   const [contextLength, setContextLength] = useState(8192);
   const [gpuLayers, setGpuLayers] = useState(-1);
@@ -131,6 +196,7 @@ export default function ServerPanel({
 
   useEffect(() => {
     refreshServers().catch((e) => onError(String(e)));
+    api.getEngines().then(setEngines).catch(() => {});
     api.getPlatform()
       .then((p) => {
         setMacMetal(p.macMetal);
@@ -165,6 +231,46 @@ export default function ServerPanel({
     return () => clearInterval(t);
   }, [view, selectedId, busy]);
 
+  const selectedCatalogModel = useMemo(
+    () => models.find((m) => modelKey(m) === selectedModel) ?? null,
+    [models, selectedModel],
+  );
+
+  const compatibleEngines = useMemo(() => {
+    if (!selectedCatalogModel) return engines;
+    const ids = new Set(selectedCatalogModel.compatibleEngines);
+    return engines.filter((e) => {
+      if (!ids.has(e.id)) return false;
+      if (backend === "metal") return e.capabilities.supportsMetal;
+      if (backend === "cuda") return e.capabilities.supportsCUDA;
+      if (backend === "rocm") return e.capabilities.supportsROCm;
+      if (backend === "vulkan") return e.capabilities.supportsVulkan;
+      if (backend === "cpu") return e.capabilities.supportsCPU;
+      return true;
+    });
+  }, [engines, selectedCatalogModel, backend]);
+
+  const activeEngineInfo = useMemo(
+    () => compatibleEngines.find((e) => e.id === engine) ?? compatibleEngines[0] ?? null,
+    [compatibleEngines, engine],
+  );
+
+  useEffect(() => {
+    if (!compatibleEngines.length) return;
+    if (!compatibleEngines.some((e) => e.id === engine)) {
+      setEngine(compatibleEngines[0].id);
+    }
+  }, [compatibleEngines, engine]);
+
+  useEffect(() => {
+    if (!activeEngineInfo) return;
+    const defaults: Record<string, unknown> = {};
+    for (const field of activeEngineInfo.configFields) {
+      defaults[field.key] = field.default;
+    }
+    setEngineConfig(defaults);
+  }, [activeEngineInfo?.id]);
+
   useEffect(() => {
     if (!selectedModel || !selectedHasWeights) return;
     const t = setTimeout(async () => {
@@ -174,10 +280,12 @@ export default function ServerPanel({
           : { modelId: selectedModel };
         const est = await api.estimateVram({
           ...key,
+          engine,
           contextLength,
           nGpuLayers: backend === "cpu" ? 0 : gpuLayers,
           kvCacheDtype: kvDtype,
           backend,
+          engineConfig,
           gpuDeviceCount: gpuDevices.length || undefined,
           gpuDevices: gpuDevices.length ? gpuDevices : undefined,
         });
@@ -189,7 +297,7 @@ export default function ServerPanel({
       }
     }, 200);
     return () => clearTimeout(t);
-  }, [selectedModel, selectedHasWeights, contextLength, gpuLayers, kvDtype, backend, gpuDevices.join(","), onError]);
+  }, [selectedModel, selectedHasWeights, contextLength, gpuLayers, kvDtype, backend, engine, engineConfig, gpuDevices.join(","), onError]);
 
   useEffect(() => {
     const logs = detailStatus?.containerLogs;
@@ -212,6 +320,9 @@ export default function ServerPanel({
     setGpuMode("single");
     setSelectedModel("");
     setSelectedHasWeights(false);
+    setSelectedModelFormat(null);
+    setEngine("llamacpp");
+    setEngineConfig({});
     setServerName("");
     setGuardrailBlock("");
     setVram(null);
@@ -232,14 +343,15 @@ export default function ServerPanel({
 
   const wizardSteps: WizardStep[] =
     backend === "cpu" || backend === "metal"
-      ? ["backend", "model", "config", "review"]
-      : ["backend", "gpu", "model", "config", "review"];
+      ? ["backend", "model", "engine", "config", "review"]
+      : ["backend", "gpu", "model", "engine", "config", "review"];
 
   const stepIndex = wizardSteps.indexOf(wizardStep);
   const canNext = () => {
     if (wizardStep === "backend") return true;
     if (wizardStep === "gpu") return backend === "cpu" || backend === "metal" || gpuDevices.length > 0;
     if (wizardStep === "model") return selectedModel && selectedHasWeights;
+    if (wizardStep === "engine") return compatibleEngines.length > 0;
     if (wizardStep === "config") return true;
     return true;
   };
@@ -254,16 +366,22 @@ export default function ServerPanel({
     if (idx > 0) setWizardStep(wizardSteps[idx - 1]);
   };
 
-  const waitForServer = async (serverId: string) => {
-    const deadline = Date.now() + 320_000;
+  const waitForServer = async (serverId: string, engineId?: EngineId) => {
+    const waitMs =
+      engineId === "vllm-legacy" ? 960_000 : engineId === "vllm" ? 660_000 : 360_000;
+    const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       const s = await api.getServerStatus(serverId);
       const inst = s.servers?.find((x) => x.definition.id === serverId);
       if (inst?.loadError) throw new Error(inst.loadError);
       if (inst?.loadPhase === "ready" && inst.running) return inst;
       if (inst?.loadPhase !== "loading" && inst?.running) return inst;
+      if (inst?.loadPhase === "idle" && inst.loadError) throw new Error(inst.loadError);
       await new Promise((r) => setTimeout(r, 500));
     }
+    const last = await api.getServerStatus(serverId);
+    const inst = last.servers?.find((x) => x.definition.id === serverId);
+    if (inst?.loadError) throw new Error(inst.loadError);
     throw new Error("Timed out waiting for server start");
   };
 
@@ -277,6 +395,7 @@ export default function ServerPanel({
       await api.setRuntimeConfig({ contextLength, nGpuLayers: gpuLayers, kvCacheDtype: kvDtype });
       const req: CreateServerRequest = {
         name: serverName.trim() || undefined,
+        engine,
         backend,
         gpuDevices: backend === "cpu" || backend === "metal" ? [] : gpuDevices,
         gpuMode: gpuDevices.length >= 2 ? gpuMode : "single",
@@ -284,10 +403,11 @@ export default function ServerPanel({
         contextLength,
         nGpuLayers: backend === "cpu" ? 0 : gpuLayers,
         kvCacheDtype: kvDtype,
+        engineConfig,
         force,
       };
       const created = await api.createServer(req);
-      const inst = await waitForServer(created.definition.id);
+      const inst = await waitForServer(created.definition.id, engine);
       setSelectedId(inst.definition.id);
       setView("detail");
       await refreshServers();
@@ -429,16 +549,46 @@ export default function ServerPanel({
                         onClick={() => {
                           setSelectedModel(id);
                           setSelectedHasWeights(true);
+                          setSelectedModelFormat(m.format);
                           setServerName(m.displayName);
                         }}
                       >
                         <div className="model-title">{m.displayName}</div>
                         <div className="model-sub">{m.subtitle}</div>
-                        {m.sizeBytes != null && <span>{formatSize(m.sizeBytes)}</span>}
+                        <div className="model-meta">
+                          {m.format && <span className="pill">{m.format}</span>}
+                          {m.sizeBytes != null && <span>{formatSize(m.sizeBytes)}</span>}
+                        </div>
                       </button>
                     );
                   })}
               </div>
+            </div>
+          )}
+
+          {wizardStep === "engine" && (
+            <div className="wizard-body">
+              <p className="muted">
+                Pick inference engine for{" "}
+                {selectedModelFormat ? `${selectedModelFormat.toUpperCase()} ` : ""}
+                model.
+              </p>
+              {compatibleEngines.length === 0 ? (
+                <p className="field-hint warn">No engines support this model on the selected backend.</p>
+              ) : (
+                <div className="backend-grid">
+                  {compatibleEngines.map((e) => (
+                    <button
+                      key={e.id}
+                      className={`backend-card ${engine === e.id ? "sel" : ""}`}
+                      onClick={() => setEngine(e.id)}
+                    >
+                      <strong>{e.label}</strong>
+                      <span>{e.description}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -476,21 +626,28 @@ export default function ServerPanel({
                     ))}
                   </div>
                 </label>
-                {backend !== "cpu" && (
+                {backend !== "cpu" && engine === "llamacpp" && (
                   <label>
                     GPU layers (-1 = all)
                     <input type="number" value={gpuLayers} onChange={(e) => setGpuLayers(Number(e.target.value))} />
                   </label>
                 )}
-                <label>
-                  KV cache dtype
-                  <select value={kvDtype} onChange={(e) => setKvDtype(e.target.value)}>
-                    <option value="f16">f16</option>
-                    <option value="f32">f32</option>
-                    <option value="q8_0">q8_0</option>
-                    <option value="q4_0">q4_0</option>
-                  </select>
-                </label>
+                {engine === "llamacpp" && (
+                  <label>
+                    KV cache dtype
+                    <select value={kvDtype} onChange={(e) => setKvDtype(e.target.value)}>
+                      <option value="f16">f16</option>
+                      <option value="f32">f32</option>
+                      <option value="q8_0">q8_0</option>
+                      <option value="q4_0">q4_0</option>
+                    </select>
+                  </label>
+                )}
+                {activeEngineInfo?.configFields.map((field) =>
+                  renderEngineField(field, engineConfig[field.key], (key, value) =>
+                    setEngineConfig((prev) => ({ ...prev, [key]: value })),
+                  ),
+                )}
               </div>
               {vram && (
                 <div className="vram-panel compact">
@@ -516,6 +673,8 @@ export default function ServerPanel({
               <dl className="review-list">
                 <dt>Backend</dt>
                 <dd>{backend.toUpperCase()}</dd>
+                <dt>Engine</dt>
+                <dd>{activeEngineInfo?.label ?? engine}</dd>
                 {backend !== "cpu" && (
                   <>
                     <dt>GPUs</dt>
@@ -584,6 +743,7 @@ export default function ServerPanel({
           <p className="mono muted">{def.modelPath}</p>
           <div className="status-row">
             <span className="pill">{def.backend.toUpperCase()}</span>
+            <span className="pill">{def.engine ?? "llamacpp"}</span>
             {def.gpuDevices.length > 0 && (
               <span className="pill">
                 GPU {def.gpuDevices.join(",")}
@@ -601,7 +761,7 @@ export default function ServerPanel({
                 setBusy("start");
                 api
                   .startServer(def.id)
-                  .then(() => waitForServer(def.id))
+                  .then(() => waitForServer(def.id, def.engine))
                   .then(onRefresh)
                   .catch((e) => onError(String(e)))
                   .finally(() => setBusy(""));
@@ -702,6 +862,7 @@ export default function ServerPanel({
                   </div>
                   <div className="server-card-meta muted">
                     <span>{d.backend.toUpperCase()}</span>
+                    <span>{d.engine ?? "llamacpp"}</span>
                     {d.gpuDevices.length > 0 && (
                       <span>
                         GPU {d.gpuDevices.join(",")}

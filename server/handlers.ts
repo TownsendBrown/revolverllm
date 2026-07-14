@@ -1,21 +1,19 @@
-import { statSync } from "fs";
-import { clampContextLength, modelMaxContext } from "../electron/lib/contextLength";
+import { clampContextLength } from "../electron/lib/contextLength";
 import { getGpuInfoAsync, getMonitorSnapshotAsync } from "./platformGpu";
 import {
   getCatalog,
-  normalizeGgufMeta,
-  readGgufMetadata,
   resolveModelPath,
+  resolveModelRef,
 } from "../electron/lib/models";
-import { readHubMeta } from "../electron/lib/localMeta";
 import { getLocalPaths, loadConfig, readLocalSettings, saveConfig } from "../electron/lib/paths";
 import { resolveRepoHostPath } from "../shared/openPath";
 import { loadRuntimeConfig, saveRuntimeConfig } from "../electron/lib/runtimeConfig";
 import { loadServerConfig, saveServerConfig } from "../electron/lib/serverConfig";
-import { estimateVram, evaluateGuardrails, effectiveGpuLayers } from "../electron/lib/vram";
+import { evaluateGuardrails, effectiveGpuLayers } from "../electron/lib/vram";
+import { DEFAULT_ENGINE, engineInfos, getEngine } from "../engines";
 import * as chatService from "../electron/lib/chatService";
 import { inferChatStream } from "../electron/lib/chatInfer";
-import type { CreateServerRequest, GpuInfo, GuardrailResult, VramEstimate } from "../electron/lib/types";
+import type { CreateServerRequest, EngineId, GpuInfo, GuardrailResult, StreamDelta, VramEstimate } from "../shared/types";
 import { metalEnabled } from "./hostAgent";
 import { canDispatchOpenPath, dispatchOpenPath } from "./openPathDispatch";
 import { serverManager } from "./serverManager";
@@ -30,16 +28,6 @@ function selectedDevices(gpu: GpuInfo, gpuDevices?: number[]): GpuDevices {
   return sel.length ? sel : gpu.devices;
 }
 
-function minGpuFreeBytes(devices: GpuDevices): number | null {
-  if (devices.length === 0) return null;
-  return Math.min(...devices.map((d) => d.freeBytes));
-}
-
-function minGpuCapacityBytes(devices: GpuDevices): number | null {
-  if (devices.length === 0) return null;
-  return Math.min(...devices.map((d) => d.totalBytes));
-}
-
 function loadedModelIds(): string[] {
   return serverManager
     .listStatuses()
@@ -50,12 +38,14 @@ function loadedModelIds(): string[] {
 export async function computeEstimate(opts: {
   modelId?: string;
   modelPath?: string;
+  engine?: EngineId;
   contextLength: number;
   nGpuLayers: number;
   kvCacheDtype?: string;
   gpuDeviceCount?: number;
   gpuDevices?: number[];
   backend?: string | null;
+  engineConfig?: Record<string, unknown>;
 }): Promise<{
   estimate: VramEstimate;
   contextLength: number;
@@ -64,37 +54,32 @@ export async function computeEstimate(opts: {
 }> {
   const key = opts.modelPath ?? opts.modelId;
   if (!key) throw new Error("modelId or modelPath required");
-  const { path, vision, minMemoryBytes, contextLengths } = resolveModelPath(key);
-  const meta = normalizeGgufMeta(await readGgufMetadata(path));
-  const hubMeta = opts.modelId ? readHubMeta(opts.modelId) : null;
-  const yamlMin = hubMeta?.minMemoryBytes ?? minMemoryBytes;
-  const yamlCtx = hubMeta?.contextLengths.length ? hubMeta.contextLengths : contextLengths;
-  const modelMax =
-    modelMaxContext(yamlCtx) ??
-    (Number(meta.context_length ?? meta.contextLength ?? 0) || null);
-  const ctx = clampContextLength(opts.contextLength, modelMax);
+
+  const modelRef = resolveModelRef(key);
+  const engineId = opts.engine ?? DEFAULT_ENGINE;
+  const engine = getEngine(engineId);
   const gpu = await getGpuInfoAsync();
   const devices = selectedDevices(gpu, opts.gpuDevices);
   const deviceCount = opts.gpuDeviceCount ?? (devices.length || null);
-  const scopedFree = devices.length ? devices.reduce((s, d) => s + d.freeBytes, 0) : null;
-  const scopedCapacity = devices.length ? devices.reduce((s, d) => s + d.totalBytes, 0) : null;
-  const estimate = estimateVram({
-    modelFileBytes: statSync(path).size,
-    ggufMeta: meta,
-    contextLength: ctx,
+
+  const { estimate, contextLength, modelMaxContext } = await engine.memory.estimate({
+    model: modelRef,
+    modelId: opts.modelId,
+    contextLength: opts.contextLength,
     nGpuLayers: effectiveGpuLayers(opts.backend, opts.nGpuLayers),
     kvCacheDtype: opts.kvCacheDtype ?? loadRuntimeConfig().kvCacheDtype,
-    visionAdapterBytes: vision ? statSync(vision).size : 0,
-    minMemoryHintBytes: yamlMin,
-    availableVramBytes: scopedFree,
-    minGpuFreeBytes: minGpuFreeBytes(devices),
-    capacityVramBytes: scopedCapacity,
-    minGpuCapacityBytes: minGpuCapacityBytes(devices),
-    gpuDeviceCount: deviceCount,
     backend: opts.backend,
+    gpuDevices: devices.map((d) => ({
+      index: d.index,
+      freeBytes: d.freeBytes,
+      totalBytes: d.totalBytes,
+    })),
+    gpuDeviceCount: deviceCount,
+    engineConfig: opts.engineConfig,
   });
+
   const guardrail = evaluateGuardrails(estimate, readLocalSettings().modelLoadingGuardrails);
-  return { estimate, contextLength: ctx, modelMaxContext: modelMax, guardrail };
+  return { estimate, contextLength, modelMaxContext, guardrail };
 }
 
 type LoadRequestOpts = {
@@ -171,7 +156,7 @@ async function prepareSendMessage(id: string, serverId?: string | null) {
   const conv = chatService.getConversationWithMessages(id)?.conversation;
   const effectiveServerId = serverId ?? conv?.serverId ?? null;
   await ensureModelForRequest(effectiveServerId);
-  const target = serverManager.inferTarget(effectiveServerId);
+  const target = await serverManager.inferTarget(effectiveServerId);
   const loaded = serverManager.getLoaded(effectiveServerId ?? undefined);
   const meta = chatService.currentModelMeta(loaded);
   meta.serverId = effectiveServerId ?? loaded?.serverId ?? null;
@@ -207,6 +192,7 @@ export const handlers = {
   },
   getMonitor: () => getMonitorSnapshotAsync(),
   getModels: () => getCatalog(loadedModelIds()),
+  getEngines: () => engineInfos(),
   listServers: () => serverManager.listStatuses(),
   getServerConfig: () => loadServerConfig(),
   setServerConfig: (patch: Parameters<typeof saveServerConfig>[0]) => saveServerConfig(patch),
@@ -245,12 +231,14 @@ export const handlers = {
   estimateVram: async (opts: {
     modelId?: string;
     modelPath?: string;
+    engine?: EngineId;
     contextLength: number;
     nGpuLayers: number;
     kvCacheDtype?: string;
     gpuDeviceCount?: number;
     gpuDevices?: number[];
     backend?: string | null;
+    engineConfig?: Record<string, unknown>;
   }) => {
     const { estimate, contextLength, modelMaxContext, guardrail } = await computeEstimate(opts);
     return {
@@ -265,12 +253,14 @@ export const handlers = {
     if (!opts.force) {
       const { guardrail } = await computeEstimate({
         modelId: opts.modelId,
+        engine: opts.engine,
         contextLength: opts.contextLength,
         nGpuLayers: opts.nGpuLayers,
         kvCacheDtype: opts.kvCacheDtype,
         gpuDeviceCount: opts.gpuDevices.length || undefined,
         gpuDevices: opts.gpuDevices,
         backend: opts.backend,
+        engineConfig: opts.engineConfig,
       });
       if (!guardrail.passes) {
         throw new Error(`GUARDRAIL_BLOCKED: ${guardrail.reason}`);
@@ -318,7 +308,7 @@ export const handlers = {
   unloadModel: () => serverManager.unloadAll(),
   chat: async (messages: Array<{ role: string; content: string }>, serverId?: string) => {
     await ensureModelForRequest(serverId);
-    const target = serverManager.inferTarget(serverId);
+    const target = await serverManager.inferTarget(serverId);
     return inferChatStream(messages, { ...target, onDelta: () => {} });
   },
   listConversations: () => chatService.listConversations(),
@@ -344,7 +334,8 @@ export const handlers = {
     id: string,
     content: string,
     serverId?: string | null,
-    onDelta?: (delta: string) => void,
+    onDelta?: (delta: StreamDelta) => void,
+    enableThinking?: boolean,
   ) => {
     const { target, meta } = await prepareSendMessage(id, serverId);
     return chatService.sendMessage(
@@ -353,6 +344,7 @@ export const handlers = {
       (messages, deltaCb) =>
         inferChatStream(messages, {
           ...target,
+          enableThinking: enableThinking === true,
           onDelta: deltaCb ?? onDelta ?? (() => {}),
         }),
       meta,
