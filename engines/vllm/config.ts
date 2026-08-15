@@ -1,12 +1,9 @@
 import { normalizeModelPath, toContainerModelPath } from "../../electron/lib/modelPaths";
+import { cudaVisibleDevices } from "../../shared/runtimeMode";
 import type { ServerDefinition } from "../../shared/types";
 import type { LoadEnvPlan } from "../types";
 import { resolveGgufTokenizer, resolveVllmTokenizerMode } from "./ggufTokenizer";
 import { VLLM_CONTAINER_PORT } from "./docker";
-
-function relativeVisibleDevices(def: ServerDefinition): string {
-  return def.gpuDevices.map((_, i) => i).join(",");
-}
 
 function tensorParallelSize(def: ServerDefinition): number {
   if (def.gpuMode === "single" && def.gpuDevices.length > 1) return 1;
@@ -63,7 +60,8 @@ export function buildVllmLoadEnv(def: ServerDefinition): LoadEnvPlan {
       DTYPE: dtype,
       QUANTIZATION: quant,
       ENFORCE_EAGER: enforceEager,
-      CUDA_VISIBLE_DEVICES: def.gpuDevices.length ? relativeVisibleDevices(def) : undefined,
+      API_KEY: def.apiKey ?? undefined,
+      CUDA_VISIBLE_DEVICES: cudaVisibleDevices(def),
     },
     logLines: [
       `[revolver] model=${def.modelId} ctx=${def.contextLength} tensor_parallel=${tp}`,

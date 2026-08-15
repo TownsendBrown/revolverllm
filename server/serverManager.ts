@@ -9,6 +9,7 @@ import { resolveModelPath, resolveModelRef } from "../electron/lib/models";
 import { clampContextLength } from "../electron/lib/contextLength";
 import { effectiveGpuLayers } from "../electron/lib/vram";
 import { loadRuntimeConfig } from "../electron/lib/runtimeConfig";
+import { loadServerConfig, serverBaseUrl, serverEndpoints } from "../electron/lib/serverConfig";
 import { DEFAULT_ENGINE, getEngine } from "../engines";
 import type {
   CreateServerRequest,
@@ -20,8 +21,16 @@ import type {
   ServerInstanceStatus,
   ServersOverview,
 } from "../shared/types";
+import { defaultRuntimeMode } from "../shared/runtimeMode";
 import { removeServerRuntime } from "./serverRuntime";
 import { InstanceRuntime } from "./instanceRuntime";
+import { probeNativeRuntime } from "./llamaServerBin";
+import {
+  buildGatewayModelEntries,
+  resolveGatewayRouteFromEntries,
+  type GatewayModelEntry,
+  type GatewayRoute,
+} from "./gatewayRouting";
 
 const runtimes = new Map<string, InstanceRuntime>();
 
@@ -36,10 +45,31 @@ function getRuntime(def: ServerDefinition): InstanceRuntime {
   return rt;
 }
 
+function runningRuntimes(): InstanceRuntime[] {
+  return listServerDefinitions()
+    .map((def) => getRuntime(def))
+    .filter((rt) => rt.isRunning());
+}
+
 function runtimeFor(id: string): InstanceRuntime | null {
   const def = getServerDefinition(id);
   if (!def) return null;
   return getRuntime(def);
+}
+
+async function refreshGatewayRoutes(): Promise<GatewayRoute[]> {
+  const routes: GatewayRoute[] = [];
+  for (const rt of runningRuntimes()) {
+    routes.push({
+      host: rt.getHost(),
+      port: rt.getPort(),
+      upstreamModel: await rt.ensureInferenceModel(),
+      apiKey: rt.getApiKey(),
+      serverId: rt.definition.id,
+      markActivity: () => rt.markActivity(),
+    });
+  }
+  return routes;
 }
 
 function defaultGpuDevices(backend: InferenceBackend, devices: number[]): number[] {
@@ -64,6 +94,7 @@ export const serverManager = {
     const servers = this.listStatuses();
     const running = servers.filter((s) => s.running);
     const primary = running[0] ?? servers.find((s) => s.loadPhase === "loading") ?? servers[0] ?? null;
+    const gatewayUrl = serverBaseUrl();
 
     return {
       servers,
@@ -74,10 +105,11 @@ export const serverManager = {
       loadError: primary?.loadError ?? null,
       loadProgress: primary?.loadProgress ?? null,
       lastSpeedTps: primary?.lastSpeedTps ?? null,
-      port: primary?.port ?? 8082,
-      host: primary?.host ?? "127.0.0.1",
+      port: loadServerConfig().port,
+      host: loadServerConfig().host === "0.0.0.0" ? "127.0.0.1" : loadServerConfig().host,
       baseUrl: primary?.baseUrl ?? "",
-      endpoints: primary?.endpoints ?? [],
+      gatewayUrl,
+      endpoints: serverEndpoints(),
       logs: primary?.logs ?? [],
       logsFiltered: primary?.logsFiltered ?? [],
       containerLogs: primary?.containerLogs ?? [],
@@ -104,6 +136,15 @@ export const serverManager = {
       throw new Error("Metal backend only supports llama.cpp");
     }
 
+    const runtime = req.backend === "metal" ? undefined : (req.runtime ?? defaultRuntimeMode());
+    if (runtime === "native") {
+      if (!engine.capabilities.supportsNative) {
+        throw new Error(`${engine.label} requires Docker — native runtime is llama.cpp only`);
+      }
+      const probe = probeNativeRuntime();
+      if (!probe.available) throw new Error(probe.error ?? "Native llama-server is not available");
+    }
+
     const ctx = clampContextLength(req.contextLength);
     const rtCfg = loadRuntimeConfig();
 
@@ -122,6 +163,7 @@ export const serverManager = {
       name,
       engine: engineId,
       backend: req.backend,
+      runtime,
       gpuDevices: effectiveGpus,
       gpuMode,
       modelId: resolved.modelId,
@@ -207,6 +249,21 @@ export const serverManager = {
       apiKey: rt.getApiKey(),
       markActivity: () => rt!.markActivity(),
     };
+  },
+
+  async listGatewayModels(): Promise<GatewayModelEntry[]> {
+    return buildGatewayModelEntries(runningRuntimes());
+  },
+
+  async resolveGateway(model?: string | null): Promise<{
+    route: GatewayRoute;
+    entries: GatewayModelEntry[];
+  }> {
+    const runtimes = runningRuntimes();
+    const entries = await buildGatewayModelEntries(runtimes);
+    const routes = await refreshGatewayRoutes();
+    const route = resolveGatewayRouteFromEntries(entries, routes, model);
+    return { route, entries };
   },
 
   /** Adopt already-running containers on boot so status survives backend restarts. */

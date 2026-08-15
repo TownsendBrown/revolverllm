@@ -11,9 +11,18 @@
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "rebuild:node": "npm rebuild better-sqlite3",
     "server": "tsx server/index.ts",
-    "start": "npm run rebuild:native && npm run build && env -u ELECTRON_RUN_AS_NODE ELECTRON_NO_SANDBOX=1 electron .",
+    "start": "npm run rebuild:native && npm run build && env -u ELECTRON_RUN_AS_NODE ELECTRON_NO_SANDBOX=1 electron . --no-sandbox",
     "start:macos": "mac/scripts/start-electron-macos.sh",
-    "pack": "npm run build && electron-builder --linux dir",
+    "start:native": "scripts/start-electron-native.sh",
+    "dev:native": "scripts/start-electron-native.sh --dev",
+    "install:llama-server": "scripts/install-llama-server.sh",
+    "backend:build:sm70": "bash backends/linux/cuda-sm70/build.sh",
+    "backend:build:pascal": "bash backends/linux/cuda-pascal/build.sh",
+    "pack": "npm run rebuild:native && npm run build && electron-builder --linux",
+    "pack:dir": "npm run rebuild:native && npm run build && electron-builder --linux dir",
+    "pack:native": "scripts/pack-electron-native.sh",
+    "pack:native:dir": "scripts/pack-electron-native.sh dir",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "docker:up": "scripts/docker-up.sh up --build",
     "docker:up:gpu": "scripts/docker-up.sh -f docker-compose.yml -f docker-compose.gpu.yml up --build",
     "docker:up:mac": "mac/scripts/docker-up-mac.sh",
@@ -21,24 +30,38 @@
     "host-agent:stop": "mac/scripts/stop-host-agent.sh",
     "host-open-agent": "scripts/run-host-open-agent.sh",
     "host-open-agent:stop": "scripts/stop-host-open-agent.sh",
-    "test": "tsx --test engines/index.test.ts shared/reasoning.test.ts"
+    "test": "tsx --test engines/*.test.ts shared/*.test.ts shared/benchmarks/*.test.ts server/*.test.ts electron/lib/*.test.ts",
+    "test:native": "tsx --test shared/runtimeMode.test.ts shared/nativeBackends.test.ts server/gpuClaims.test.ts server/llamaServerBin.test.ts server/nativeBackends.test.ts test/native/*.test.ts",
+    "benchmark:e2e": "tsx scripts/run-benchmark-e2e.ts"
   },
   "build": {
     "appId": "ai.revolver.app",
     "productName": "Revolver",
+    "icon": "build/icon.png",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**",
-      "dist-electron/**"
+      "dist-electron/**",
+      "build/icon.png",
+      "package.json",
+      "node_modules/better-sqlite3/**",
+      "node_modules/bindings/**",
+      "node_modules/file-uri-to-path/**"
     ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "npmRebuild": true,
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "Development"
+      "category": "Development",
+      "synopsis": "Local model manager for GGUF files"
     }
   },
   "dependencies": {

@@ -8,12 +8,12 @@ Revolver is a local model manager for **GGUF** files. Point it at a models direc
 
 The UI is a React app with four areas: **Chat** (multi-turn against a running server), **Server** (load models, create/stop instances, tail logs), **Config** (paths and runtime defaults), and **Monitor** (GPU/VRAM and load progress). Chat supports markdown, math (KaTeX), and reasoning traces when the model emits them.
 
-Under the hood, Revolver is a **control plane**, not the inference engine. A Node backend scans your disk for GGUF files (including Hugging Face hub layouts), reads metadata, estimates VRAM, and persists server definitions. When you load a model or create a server, the backend writes config into a shared volume and uses the **host Docker daemon** to spawn one container per server — `revolver-server-<id>` running the official `ghcr.io/ggml-org/llama.cpp` image for your backend (CPU, CUDA, ROCm, or Vulkan). Revolver tracks container lifecycle, parses logs for load phases, and proxies chat requests to the running `llama-server`.
+Under the hood, Revolver is a **control plane**, not the inference engine. A Node backend scans your disk for GGUF files (including Hugging Face hub layouts), reads metadata, estimates VRAM, and persists server definitions. When you load a model, the backend writes a per-server env file and starts **one inference process per server** — either a Docker container (`ghcr.io/ggml-org/llama.cpp` or vLLM) or a **native host `llama-server`**. Each server can pin a different GPU via `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES`. Revolver tracks lifecycle, parses logs, and proxies chat through a single OpenAI gateway.
 
 You can run it two ways:
 
-- **Electron** — desktop app; the main process hosts the same backend handlers and talks to Docker on your machine.
-- **Docker Compose** — nginx serves the web UI on port 8080 and proxies `/api/*` to a loopback-bound backend that orchestrates llama containers via the mounted Docker socket.
+- **Electron** — desktop app; the main process hosts the same backend handlers. Inference can use Docker **or** a native `llama-server` binary (no Docker required for llama.cpp).
+- **Docker Compose** — nginx serves the web UI on port 8080 and proxies `/api/*` to a loopback-bound backend that orchestrates **containers** via the mounted Docker socket (native spawn is disabled inside Compose).
 
 In both modes, models stay on disk (bind-mounted into containers); Revolver only manages configuration and orchestration.
 
@@ -32,13 +32,13 @@ In both modes, models stay on disk (bind-mounted into containers); Revolver only
   ┌────────▼────────┐
   │  main process   │  server/handlers
   └────────┬────────┘
-           │ docker CLI
+           │ docker CLI  **or**  spawn llama-server
   ┌────────▼────────────────────────────────────────┐
-  │  host Docker daemon                             │
+  │  host                                           │
   │  ┌──────────────────┐  ┌──────────────────┐     │
-  │  │ revolver-server- │  │ revolver-server- │     │
-  │  │ <id>  (CUDA/CPU) │  │ <id>  …          │     │
-  │  │  llama.cpp       │  │  llama.cpp       │     │
+  │  │ revolver-server- │  │ native process   │     │
+  │  │ <id>  (Docker)   │  │ llama-server     │     │
+  │  │  GPU 0           │  │  GPU 1           │     │
   │  └────────┬─────────┘  └────────┬─────────┘     │
   └───────────┼─────────────────────┼───────────────┘
               │                     │
@@ -77,14 +77,24 @@ In both modes, models stay on disk (bind-mounted into containers); Revolver only
   vulkan  ──►  ghcr.io/ggml-org/llama.cpp:server-vulkan
 ```
 
+**Native (no Docker)** — llama.cpp only. Electron / `npm run server` spawn the host `llama-server` binary (CUDA pack matching GPU compute cap, `LLAMA_SERVER_BIN`, or PATH). Same env-file contract as containers, but:
+
+- Model paths stay on the host (no `/models` rewrite)
+- `CUDA_VISIBLE_DEVICES` uses **host** GPU indices (Docker remaps to `0..n-1`)
+- Exclusive GPU leases: two running servers cannot claim the same backend index unless `force`
+- Compose backend (`REVOLVER_COMPOSE=1`) refuses native spawn — use Electron on the host, or Docker
+
+vLLM / vLLM Pascal stay Docker-only.
+
 ---
 
 ## Prerequisites
 
 ```
   Node.js 22+          npm
-  Docker               (Electron + Docker deploy paths)
-  NVIDIA Container Toolkit   (optional — GPU overlay)
+  Docker               (optional for Electron llama.cpp — required for Compose and vLLM)
+  llama-server         (optional — native runtime; Linux: ./backends/build.sh sm70 · macOS: brew install llama.cpp)
+  NVIDIA Container Toolkit   (optional — GPU overlay for Compose)
   GGUF models          on disk under a known directory
 ```
 
@@ -119,7 +129,7 @@ NVIDIA_SMI_HOST_PATH=/usr/bin/nvidia-smi
 
 Compose also sets internal backend variables (`REVOLVER_DOCKER`, `REVOLVER_MODELS_DIR`, `LLAMA_CONFIG_DIR`, etc.) — you do not need to add those to `.env`. The GPU overlay adds `LLAMA_GPU=1` and `NVIDIA_VISIBLE_DEVICES=all` automatically when you use `docker-compose.gpu.yml`.
 
-For local development without Compose, the backend honors `PORT` (default `3001`) and the `REVOLVER_*` / `LLAMA_*` variables that Electron sets at startup.
+For local development without Compose, the backend honors `PORT` (default `3001`) and the `REVOLVER_*` / `LLAMA_*` variables that Electron sets at startup. Native inference: `LLAMA_SERVER_BIN`, `REVOLVER_RUNTIME=native|docker`. Compose sets `REVOLVER_COMPOSE=1` so the backend will not spawn host processes.
 
 ---
 
@@ -136,18 +146,35 @@ Backend only (no Electron shell):
 npm run server       # http://127.0.0.1:3001
 ```
 
+Default new servers to native llama-server:
+
+```bash
+export LLAMA_SERVER_BIN=/usr/local/bin/llama-server
+export REVOLVER_RUNTIME=native
+npm run server
+```
+
+### Tests
+
+```bash
+npm test             # unit tests (no inference processes)
+npm run test:native  # native supervisor + GPU claim pipeline (mock llama-server)
+npm run typecheck
+```
+
+`test:native` does **not** need Docker or a real GGUF. It spawns `scripts/mock-llama-server.mjs` twice on different ports with `CUDA_VISIBLE_DEVICES=0` vs `1`, asserts exclusive GPU leases, `/health`, and `/v1/models`. CI runs this as a separate `test-native` job.
+
 ---
 
 ## Deploy
 
 ### Electron
 
-Desktop app. Orchestrates **llama-server** via Docker on the host (same model as compose backend).
+Desktop app. Each server is either a **Docker container** or a **native `llama-server` process** (wizard: Docker vs Native process). Native on Linux uses a CUDA pack from `backends/` (or `LLAMA_SERVER_BIN`). macOS Metal is `mac/`, not a CUDA pack. vLLM still requires Docker.
 
 **Requirements**
 
-- Docker installed and running
-- User in `docker` group (or root)
+- Docker **or** a llama.cpp `llama-server` build (CUDA pack matching your GPU, or Metal on macOS)
 - GGUF models reachable from paths in `config.json`
 
 **1. Configure paths**
@@ -166,26 +193,52 @@ Edit `config.json` at the repo root (or your install dir):
 
 ```bash
 npm install
-npm run dev          # development
+npm run dev          # development (Docker default for new servers)
 npm start            # production build + Electron
 ```
+
+**Native llama.cpp (no Docker)**
+
+Linux CUDA packs live in `backends/` (Volta sm_70 first; Pascal sm_60/61 same layout). macOS Metal stays in `mac/` — not these packs.
+
+```bash
+./backends/build.sh sm70              # Tesla V100 / sm_70
+npm run install:llama-server          # copy pack → ~/.revolver/backends/
+npm run start:native
+```
+
+Pascal (P100 / GTX 10xx): `./backends/build.sh pascal`
+
+Or point at a binary:
+
+```bash
+export LLAMA_SERVER_BIN=/path/to/llama-server
+npm run start:native
+```
+
+vLLM still needs Docker. `pack:native` bundles any staged `backends/dist/*` into extraResources; it does not download llama.cpp.
+
+See [backends/README.md](backends/README.md).
 
 **3. Package (Linux)**
 
 ```bash
-npm run pack         # AppImage + deb → release/
+npm run pack           # AppImage + deb → release/ (Docker default)
+npm run pack:native    # AppImage + deb → release-native/ (native default)
 ```
 
 ```
-  npm run build  ──►  dist/ + dist-electron/
+  npm run pack[:native]
          │
          ▼
-  electron-builder  ──►  release/
+  electron-builder  ──►  release/ or release-native/
                           ├── Revolver-*.AppImage
                           └── revolver_*_amd64.deb
 ```
 
-On first launch, Electron sets `REVOLVER_DOCKER=1`, detects GPU, and stores llama config under `data/llama-config/`. Each server definition spawns `revolver-server-<id>` on the host daemon.
+`pack:native` writes `revolverRuntime=native` into the packaged `package.json` so new servers default to host `llama-server` even when Docker is installed. Staged `backends/dist/*` packs are copied into extraResources.
+
+On first launch, Electron detects GPU and stores llama config under `data/llama-config/`. Docker servers spawn `revolver-server-<id>` on the host daemon. Native servers spawn `llama-server` on `127.0.0.1:<hostPort>` with host `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` (no Docker index remapping). Two servers on GPU 0 and GPU 1 is the supported parallel layout; overlapping GPUs are rejected unless you pass `force`.
 
 ---
 
@@ -270,11 +323,21 @@ docker compose down
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Electron + Vite dev server |
+| `npm run dev:native` | Electron + Vite, native llama-server default |
 | `npm run build` | Production renderer + main |
 | `npm run build:web` | Web-only bundle (Docker frontend) |
-| `npm run start` | Run packaged Electron app |
-| `npm run pack` | Linux AppImage + deb |
+| `npm run start` | Production build + Electron |
+| `npm run start:native` | Production Electron with native llama-server (no Docker) |
+| `npm run install:llama-server` | Install Linux CUDA pack into `~/.revolver/backends/` (macOS: `mac/scripts/install-llama-server.sh`) |
+| `npm run backend:build:sm70` | Build Volta sm_70 `llama-server` pack → `backends/dist/` |
+| `npm run backend:build:pascal` | Build Pascal sm_60/61 pack → `backends/dist/` |
+| `npm run start:macos` | Electron + Metal host agent |
+| `npm run pack` | Linux AppImage + deb → `release/` |
+| `npm run pack:native` | Linux AppImage + deb → `release-native/` (native default) |
+| `npm run pack:native:dir` | Unpacked native Electron dir |
 | `npm run server` | Standalone Express backend |
+| `npm run test` | Unit tests |
+| `npm run test:native` | Native process supervisor + multi-GPU claim tests (mock llama-server) |
 | `npm run docker:up` | Compose stack (CPU) |
 | `npm run docker:up:gpu` | Compose stack + NVIDIA GPU |
 | `npm run docker:up:mac` | Compose stack + auto-start macOS Metal host agent |

@@ -9,6 +9,7 @@ export const LLAMACPP_CAPABILITIES: EngineCapabilities = {
   supportsVulkan: true,
   supportsCPU: true,
   supportsMultiGPU: true,
+  supportsNative: true,
   api: "openai",
 };
 

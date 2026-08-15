@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import LoadProgressBar from "./LoadProgressBar";
+import { useStickyScroll } from "../lib/useStickyScroll";
 import {
   api,
   type CatalogModel,
@@ -13,9 +14,20 @@ import {
   type LoadProgress,
   type ServerConfig,
   type ServerInstanceStatus,
+  type ServerRuntimeMode,
   type ServerStatus,
   type VramEstimate,
 } from "../revolver";
+import {
+  backendGpuHint,
+  deviceUsableForBackend,
+  devicesForBackend,
+  incompatibleDeviceReason,
+  recommendedWizardBackend,
+  runtimeIndex,
+  validateBackendDevices,
+  vendorLabel,
+} from "../../shared/gpuDevices";
 
 type Props = {
   models: CatalogModel[];
@@ -26,6 +38,7 @@ type Props = {
   setBusy: (v: string) => void;
   onRefresh: () => void;
   onError: (msg: string) => void;
+  onServerReady?: (serverId: string) => void;
 };
 
 type View = "list" | "wizard" | "detail";
@@ -36,10 +49,20 @@ const DOCKER_GPU_BACKENDS = new Set<InferenceBackend>(["cuda", "rocm", "vulkan"]
 const BACKENDS: { id: InferenceBackend; label: string; hint: string }[] = [
   { id: "metal", label: "Metal (macOS)", hint: "Apple Silicon GPU via native llama-server" },
   { id: "cuda", label: "CUDA", hint: "NVIDIA GPUs via llama.cpp CUDA backend" },
-  { id: "rocm", label: "ROCm", hint: "AMD GPUs (ROCm image)" },
-  { id: "vulkan", label: "Vulkan", hint: "Cross-vendor GPU via Vulkan" },
+  { id: "rocm", label: "ROCm", hint: "AMD GPUs (gfx1030+). Navi 10 / RX 5700 XT: use Vulkan" },
+  { id: "vulkan", label: "Vulkan", hint: "AMD, Intel, and NVIDIA via Vulkan (RADV for RX 5700 XT)" },
   { id: "cpu", label: "CPU", hint: "No GPU — runs on host CPU only" },
 ];
+
+function initialWizardRuntime(opts: {
+  defaultRuntime?: ServerRuntimeMode;
+  native: boolean;
+  docker: boolean;
+}): ServerRuntimeMode {
+  if (opts.defaultRuntime === "native" && opts.native) return "native";
+  if (opts.native && !opts.docker) return "native";
+  return "docker";
+}
 
 function availableBackends(macMetal: boolean, dockerGpu: boolean) {
   if (macMetal && !dockerGpu) return BACKENDS.filter((b) => !DOCKER_GPU_BACKENDS.has(b.id));
@@ -50,10 +73,9 @@ function availableBackends(macMetal: boolean, dockerGpu: boolean) {
 function defaultWizardBackend(
   macMetal: boolean,
   dockerGpu: boolean,
-  gpuAvailable: boolean,
+  gpu: GpuInfo | null,
 ): InferenceBackend {
-  if (macMetal && !dockerGpu) return "metal";
-  return gpuAvailable ? "cuda" : "cpu";
+  return recommendedWizardBackend(macMetal, dockerGpu, gpu);
 }
 
 const phaseLabel: Record<string, string> = {
@@ -154,6 +176,7 @@ export default function ServerPanel({
   setBusy,
   onRefresh,
   onError,
+  onServerReady,
 }: Props) {
   const [view, setView] = useState<View>("list");
   const [wizardStep, setWizardStep] = useState<WizardStep>("backend");
@@ -162,8 +185,14 @@ export default function ServerPanel({
   const [detailStatus, setDetailStatus] = useState<ServerInstanceStatus | null>(null);
 
   const [backend, setBackend] = useState<InferenceBackend>("cuda");
+  const [runtime, setRuntime] = useState<ServerRuntimeMode>("docker");
   const [macMetal, setMacMetal] = useState(false);
   const [dockerGpu, setDockerGpu] = useState(false);
+  const [dockerAvailable, setDockerAvailable] = useState(true);
+  const [nativeAvailable, setNativeAvailable] = useState(false);
+  const [nativeError, setNativeError] = useState<string | undefined>();
+  const [nativeBackendPack, setNativeBackendPack] = useState<string | null>(null);
+  const [defaultRuntime, setDefaultRuntime] = useState<ServerRuntimeMode>("docker");
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
   const [selectedModel, setSelectedModel] = useState("");
@@ -180,12 +209,33 @@ export default function ServerPanel({
   const [modelMaxCtx, setModelMaxCtx] = useState<number | null>(null);
   const [guardrailBlock, setGuardrailBlock] = useState("");
   const [serverDraft, setServerDraft] = useState<ServerConfig | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
   const serverLogRef = useRef<HTMLPreElement>(null);
 
   const wizardBackends = useMemo(
     () => availableBackends(macMetal, dockerGpu),
     [macMetal, dockerGpu],
+  );
+
+  const compatibleGpus = useMemo(
+    () => devicesForBackend(gpu?.devices ?? [], backend),
+    [gpu, backend],
+  );
+
+  const gpuHint = useMemo(
+    () => backendGpuHint(backend, gpu?.devices ?? []),
+    [backend, gpu],
+  );
+
+  const backendBlock = useMemo(
+    () => validateBackendDevices(backend, gpu?.devices ?? []),
+    [backend, gpu],
+  );
+
+  const recBackend = useMemo(
+    () => recommendedWizardBackend(macMetal, dockerGpu, gpu),
+    [macMetal, dockerGpu, gpu],
   );
 
   const refreshServers = useCallback(async () => {
@@ -195,12 +245,27 @@ export default function ServerPanel({
   }, []);
 
   useEffect(() => {
+    if (serverStatus?.servers) setServers(serverStatus.servers);
+  }, [serverStatus?.servers]);
+
+  useEffect(() => {
     refreshServers().catch((e) => onError(String(e)));
     api.getEngines().then(setEngines).catch(() => {});
     api.getPlatform()
       .then((p) => {
         setMacMetal(p.macMetal);
         setDockerGpu(p.dockerGpu);
+        setDockerAvailable(p.docker);
+        setNativeAvailable(p.native);
+        setNativeError(p.nativeError);
+        setNativeBackendPack(p.nativeBackendPack ?? null);
+        const next = initialWizardRuntime({
+          defaultRuntime: p.defaultRuntime,
+          native: p.native,
+          docker: p.docker,
+        });
+        setDefaultRuntime(next);
+        setRuntime(next);
       })
       .catch(() => {});
     api.getServerConfig().then(setServerDraft);
@@ -210,6 +275,25 @@ export default function ServerPanel({
     if (!macMetal || dockerGpu || !DOCKER_GPU_BACKENDS.has(backend)) return;
     setBackend("metal");
   }, [macMetal, dockerGpu, backend]);
+
+  useEffect(() => {
+    const err = validateBackendDevices(backend, gpu?.devices ?? []);
+    if (!err) return;
+    const rec = recommendedWizardBackend(macMetal, dockerGpu, gpu);
+    if (rec !== backend) setBackend(rec);
+  }, [backend, gpu, macMetal, dockerGpu]);
+
+  useEffect(() => {
+    if (backend === "cpu" || backend === "metal") {
+      setGpuDevices([]);
+      return;
+    }
+    setGpuDevices((prev) => {
+      const keep = prev.filter((i) => compatibleGpus.some((d) => d.index === i));
+      if (keep.length) return keep;
+      return compatibleGpus[0] != null ? [compatibleGpus[0].index] : [];
+    });
+  }, [backend, compatibleGpus]);
 
   useEffect(() => {
     api.getRuntimeConfig().then((rt) => {
@@ -237,10 +321,10 @@ export default function ServerPanel({
   );
 
   const compatibleEngines = useMemo(() => {
-    if (!selectedCatalogModel) return engines;
-    const ids = new Set(selectedCatalogModel.compatibleEngines);
+    const ids = selectedCatalogModel ? new Set(selectedCatalogModel.compatibleEngines) : null;
     return engines.filter((e) => {
-      if (!ids.has(e.id)) return false;
+      if (ids && !ids.has(e.id)) return false;
+      if (runtime === "native") return e.capabilities.supportsNative;
       if (backend === "metal") return e.capabilities.supportsMetal;
       if (backend === "cuda") return e.capabilities.supportsCUDA;
       if (backend === "rocm") return e.capabilities.supportsROCm;
@@ -248,7 +332,7 @@ export default function ServerPanel({
       if (backend === "cpu") return e.capabilities.supportsCPU;
       return true;
     });
-  }, [engines, selectedCatalogModel, backend]);
+  }, [engines, selectedCatalogModel, backend, runtime]);
 
   const activeEngineInfo = useMemo(
     () => compatibleEngines.find((e) => e.id === engine) ?? compatibleEngines[0] ?? null,
@@ -299,25 +383,24 @@ export default function ServerPanel({
     return () => clearTimeout(t);
   }, [selectedModel, selectedHasWeights, contextLength, gpuLayers, kvDtype, backend, engine, engineConfig, gpuDevices.join(","), onError]);
 
-  useEffect(() => {
-    const logs = detailStatus?.containerLogs;
-    if (logRef.current && logs?.length) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [detailStatus?.containerLogs]);
-
-  useEffect(() => {
-    const logs = detailStatus?.serverLogs;
-    if (serverLogRef.current && logs?.length) {
-      serverLogRef.current.scrollTop = serverLogRef.current.scrollHeight;
-    }
-  }, [detailStatus?.serverLogs]);
+  const logsActive = view === "detail" && !!selectedId && !!detailStatus;
+  useStickyScroll(logRef, [detailStatus?.containerLogs], {
+    resetKey: selectedId,
+    enabled: logsActive,
+  });
+  useStickyScroll(serverLogRef, [detailStatus?.serverLogs], {
+    resetKey: selectedId,
+    enabled: logsActive,
+  });
 
   const resetWizard = () => {
     setWizardStep("backend");
-    setBackend(defaultWizardBackend(macMetal, dockerGpu, gpu?.available ?? false));
-    setGpuDevices(gpu?.devices[0] != null ? [gpu.devices[0].index] : []);
+    setBackend(defaultWizardBackend(macMetal, dockerGpu, gpu));
+    const rec = recommendedWizardBackend(macMetal, dockerGpu, gpu);
+    const pool = devicesForBackend(gpu?.devices ?? [], rec);
+    setGpuDevices(pool[0] != null ? [pool[0].index] : []);
     setGpuMode("single");
+    setRuntime(defaultRuntime);
     setSelectedModel("");
     setSelectedHasWeights(false);
     setSelectedModelFormat(null);
@@ -346,14 +429,39 @@ export default function ServerPanel({
       ? ["backend", "model", "engine", "config", "review"]
       : ["backend", "gpu", "model", "engine", "config", "review"];
 
+  const claimedServerForDevice = (d: { index: number }) => {
+    const device = gpu?.devices.find((x) => x.index === d.index);
+    if (!device) return undefined;
+    const ri = runtimeIndex(device, backend);
+    if (ri == null) return undefined;
+    return servers.find(
+      (s) =>
+        s.running &&
+        s.definition.backend === backend &&
+        s.definition.gpuDevices.includes(ri),
+    );
+  };
+
   const stepIndex = wizardSteps.indexOf(wizardStep);
   const canNext = () => {
-    if (wizardStep === "backend") return true;
-    if (wizardStep === "gpu") return backend === "cpu" || backend === "metal" || gpuDevices.length > 0;
+    if (wizardStep === "backend") {
+      if (backendBlock) return false;
+      if (backend === "metal") return true;
+      if (runtime === "native") return nativeAvailable;
+      return dockerAvailable;
+    }
+    if (wizardStep === "gpu") {
+      if (backend === "cpu" || backend === "metal") return true;
+      if (!gpuDevices.length) return false;
+      return gpuDevices.every((i) => {
+        const d = gpu?.devices.find((x) => x.index === i);
+        return d != null && deviceUsableForBackend(d, backend);
+      });
+    }
     if (wizardStep === "model") return selectedModel && selectedHasWeights;
     if (wizardStep === "engine") return compatibleEngines.length > 0;
     if (wizardStep === "config") return true;
-    return true;
+    return !validateBackendDevices(backend, gpu?.devices ?? [], gpuDevices);
   };
 
   const nextStep = () => {
@@ -397,6 +505,7 @@ export default function ServerPanel({
         name: serverName.trim() || undefined,
         engine,
         backend,
+        runtime: backend === "metal" ? undefined : runtime,
         gpuDevices: backend === "cpu" || backend === "metal" ? [] : gpuDevices,
         gpuMode: gpuDevices.length >= 2 ? gpuMode : "single",
         modelId: selectedModel,
@@ -407,9 +516,10 @@ export default function ServerPanel({
         force,
       };
       const created = await api.createServer(req);
-      const inst = await waitForServer(created.definition.id, engine);
-      setSelectedId(inst.definition.id);
+      setSelectedId(created.definition.id);
+      setDetailStatus(created);
       setView("detail");
+      onServerReady?.(created.definition.id);
       await refreshServers();
       await onRefresh();
     } catch (e) {
@@ -423,6 +533,10 @@ export default function ServerPanel({
       setBusy("");
     }
   };
+
+  useEffect(() => {
+    if (view !== "detail") setConfirmDelete(false);
+  }, [view]);
 
   const openDetail = (id: string) => {
     setSelectedId(id);
@@ -458,41 +572,104 @@ export default function ServerPanel({
 
           {wizardStep === "backend" && (
             <div className="wizard-body">
-              <p className="muted">Pick inference backend for this container.</p>
+              <p className="muted">Pick inference backend for this server.</p>
               <div className="backend-grid">
-                {wizardBackends.map((b) => (
+                {wizardBackends.map((b) => {
+                  const blocked = validateBackendDevices(b.id, gpu?.devices ?? []);
+                  return (
                   <button
                     key={b.id}
-                    className={`backend-card ${backend === b.id ? "sel" : ""}`}
+                    type="button"
+                    disabled={!!blocked}
+                    className={`backend-card ${backend === b.id ? "sel" : ""} ${recBackend === b.id ? "recommend" : ""} ${blocked ? "blocked" : ""}`}
                     onClick={() => {
+                      if (blocked) return;
                       setBackend(b.id);
                       if (b.id === "cpu") setGpuDevices([]);
                     }}
                   >
                     <strong>{b.label}</strong>
                     <span>{b.hint}</span>
+                    {recBackend === b.id && !blocked && <span className="backend-rec">Recommended</span>}
+                    {blocked && <span className="field-hint warn">{blocked}</span>}
                   </button>
-                ))}
+                  );
+                })}
               </div>
+              {backend !== "metal" && (
+                <>
+                  <p className="muted" style={{ marginTop: "1.25rem" }}>
+                    How to run llama-server
+                  </p>
+                  <div className="backend-grid">
+                    <button
+                      type="button"
+                      disabled={!dockerAvailable}
+                      className={`backend-card ${runtime === "docker" ? "sel" : ""} ${!dockerAvailable ? "blocked" : ""}`}
+                      onClick={() => dockerAvailable && setRuntime("docker")}
+                    >
+                      <strong>Docker</strong>
+                      <span>Official llama.cpp / vLLM images. Isolates CUDA toolkit.</span>
+                      {!dockerAvailable && <span className="field-hint warn">Docker daemon not reachable</span>}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!nativeAvailable}
+                      className={`backend-card ${runtime === "native" ? "sel" : ""} ${!nativeAvailable ? "blocked" : ""}`}
+                      onClick={() => nativeAvailable && setRuntime("native")}
+                    >
+                      <strong>Native process</strong>
+                      <span>Host llama-server. One process per server, pin GPUs with CUDA_VISIBLE_DEVICES.</span>
+                      {nativeAvailable && <span className="backend-rec">No Docker{nativeBackendPack ? ` · ${nativeBackendPack}` : ""}</span>}
+                      {!nativeAvailable && (
+                        <span className="field-hint warn">{nativeError ?? "llama-server not found"}</span>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
           {wizardStep === "gpu" && (
             <div className="wizard-body">
               <p className="muted">Select one GPU per server, or two to combine VRAM for a larger model.</p>
-              {!gpu?.available && <p className="field-hint warn">No GPU detected — pick CPU backend instead.</p>}
+              {gpuHint && <p className="field-hint warn">{gpuHint}</p>}
+              {!gpu?.available && !gpuHint && (
+                <p className="field-hint warn">No GPU detected — pick CPU backend instead.</p>
+              )}
               <div className="gpu-grid">
-                {gpu?.devices.map((d) => (
+                {(gpu?.devices ?? []).map((d) => {
+                  const blocked = !deviceUsableForBackend(d, backend);
+                  const reason = blocked ? incompatibleDeviceReason(d, backend) : null;
+                  const claimed = !blocked ? claimedServerForDevice(d) : undefined;
+                  return (
                   <button
-                    key={d.index}
+                    key={`${d.vendor}-${d.index}`}
                     type="button"
-                    className={`gpu-card selectable ${gpuDevices.includes(d.index) ? "sel" : ""}`}
-                    onClick={() => toggleGpu(d.index)}
+                    disabled={blocked || !!claimed}
+                    className={`gpu-card selectable ${gpuDevices.includes(d.index) ? "sel" : ""} ${blocked || claimed ? "blocked" : ""}`}
+                    onClick={() => {
+                      if (!blocked && !claimed) toggleGpu(d.index);
+                    }}
                   >
-                    <strong>GPU {d.index}: {d.name}</strong>
+                    <strong>
+                      GPU {d.index}: {d.name}{" "}
+                      <span className={`gpu-vendor ${d.vendor}`}>{vendorLabel(d.vendor)}</span>
+                    </strong>
                     <span>{d.freeGb.toFixed(1)} GB free / {d.totalGb.toFixed(1)} GB</span>
+                    {reason && <span className="field-hint warn">{reason}</span>}
+                    {claimed && (
+                      <span className="field-hint warn">
+                        In use: {claimed.definition.name}
+                      </span>
+                    )}
+                    {!blocked && !claimed && d.recommendedBackend === backend && (
+                      <span className="field-hint">Best backend for this card</span>
+                    )}
                   </button>
-                ))}
+                  );
+                })}
               </div>
               {gpuDevices.length >= 2 && (
                 <div className="gpu-mode-panel">
@@ -574,7 +751,11 @@ export default function ServerPanel({
                 model.
               </p>
               {compatibleEngines.length === 0 ? (
-                <p className="field-hint warn">No engines support this model on the selected backend.</p>
+                <p className="field-hint warn">
+                  {runtime === "native"
+                    ? "Native runtime is llama.cpp (GGUF) only. Switch to Docker for vLLM, or pick a GGUF model."
+                    : "No engines support this model on the selected backend."}
+                </p>
               ) : (
                 <div className="backend-grid">
                   {compatibleEngines.map((e) => (
@@ -673,13 +854,20 @@ export default function ServerPanel({
               <dl className="review-list">
                 <dt>Backend</dt>
                 <dd>{backend.toUpperCase()}</dd>
+                <dt>Runtime</dt>
+                <dd>{backend === "metal" ? "native (Metal host-agent)" : runtime === "native" ? "native process" : "Docker container"}</dd>
                 <dt>Engine</dt>
                 <dd>{activeEngineInfo?.label ?? engine}</dd>
                 {backend !== "cpu" && (
                   <>
                     <dt>GPUs</dt>
                     <dd>
-                      {gpuDevices.join(", ") || "none"}
+                      {gpuDevices
+                        .map((i) => {
+                          const d = gpu?.devices.find((x) => x.index === i);
+                          return d ? `${i} ${d.name}` : String(i);
+                        })
+                        .join(", ") || "none"}
                       {gpuDevices.length >= 2 && gpuMode === "combined" ? " (combined)" : ""}
                     </dd>
                   </>
@@ -688,8 +876,12 @@ export default function ServerPanel({
                 <dd>{selectedModel.split("/").pop()}</dd>
                 <dt>Context</dt>
                 <dd>{contextLength.toLocaleString()}</dd>
-                <dt>Container</dt>
-                <dd className="mono muted">New Docker container on next free port</dd>
+                <dt>Listen</dt>
+                <dd className="mono muted">
+                  {runtime === "native" || backend === "metal"
+                    ? "Host process on next free port"
+                    : "New Docker container on next free port"}
+                </dd>
               </dl>
               {guardrailBlock && (
                 <div className="banner warn guardrail-block">
@@ -711,8 +903,12 @@ export default function ServerPanel({
                 Next
               </button>
             ) : (
-              <button className="primary" disabled={!!busy} onClick={() => startServer(false)}>
-                {busy === "create" ? "Starting container…" : "Start server"}
+              <button
+                className="primary"
+                disabled={!!busy || !canNext()}
+                onClick={() => startServer(false)}
+              >
+                {busy === "create" ? "Starting…" : "Start server"}
               </button>
             )}
           </div>
@@ -744,6 +940,9 @@ export default function ServerPanel({
           <div className="status-row">
             <span className="pill">{def.backend.toUpperCase()}</span>
             <span className="pill">{def.engine ?? "llamacpp"}</span>
+            <span className="pill">
+              {def.backend === "metal" ? "native" : def.runtime === "native" ? "native" : "docker"}
+            </span>
             {def.gpuDevices.length > 0 && (
               <span className="pill">
                 GPU {def.gpuDevices.join(",")}
@@ -752,6 +951,26 @@ export default function ServerPanel({
             )}
             <span className="muted mono">{detailStatus.baseUrl}</span>
           </div>
+          {detailStatus.running && detailStatus.gatewayUrl && (
+            <div className="panel gateway-panel" style={{ marginTop: "1rem" }}>
+              <h3 style={{ marginTop: 0 }}>OpenAI gateway (Cline, etc.)</h3>
+              <p className="muted small">
+                Fixed endpoint — routes by model name. Use this in VS Code instead of the direct
+                server port above.
+              </p>
+              <div className="status-row">
+                <span className="mono">{detailStatus.gatewayUrl}/v1</span>
+              </div>
+              <p className="muted small">
+                Model id: <span className="mono">{def.modelId.includes("/") ? def.modelId : def.modelPath.split("/").pop()?.replace(/\.gguf$/i, "") ?? def.modelId}</span>
+              </p>
+              <ul className="mono small muted" style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+                {detailStatus.endpoints.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {showLoadProgress && loadProgress && <LoadProgressBar progress={loadProgress} />}
           {detailStatus.loadError && <div className="banner error">{detailStatus.loadError}</div>}
           <div className="actions">
@@ -762,7 +981,10 @@ export default function ServerPanel({
                 api
                   .startServer(def.id)
                   .then(() => waitForServer(def.id, def.engine))
-                  .then(onRefresh)
+                  .then(() => {
+                    onServerReady?.(def.id);
+                    return onRefresh();
+                  })
                   .catch((e) => onError(String(e)))
                   .finally(() => setBusy(""));
               }}
@@ -785,7 +1007,11 @@ export default function ServerPanel({
               className="warn-btn"
               disabled={!!busy}
               onClick={() => {
-                if (!confirm(`Delete server "${def.name}" and remove its container?`)) return;
+                if (!confirmDelete) {
+                  setConfirmDelete(true);
+                  return;
+                }
+                setConfirmDelete(false);
                 api
                   .deleteServer(def.id)
                   .then(() => {
@@ -796,8 +1022,13 @@ export default function ServerPanel({
                   .catch((e) => onError(String(e)));
               }}
             >
-              Delete
+              {confirmDelete ? "Confirm delete" : "Delete"}
             </button>
+            {confirmDelete && (
+              <button className="ghost" disabled={!!busy} onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </button>
+            )}
           </div>
         </section>
 
@@ -843,7 +1074,7 @@ export default function ServerPanel({
         {servers.length === 0 ? (
           <div className="empty-state">
             <p>No servers yet.</p>
-            <p className="muted">Create a server to load a model in its own Docker container.</p>
+            <p className="muted">Create a server to load a model (Docker container or native llama-server).</p>
             <button className="primary" onClick={openWizard}>
               New server
             </button>
@@ -863,6 +1094,7 @@ export default function ServerPanel({
                   <div className="server-card-meta muted">
                     <span>{d.backend.toUpperCase()}</span>
                     <span>{d.engine ?? "llamacpp"}</span>
+                    <span>{d.backend === "metal" ? "native" : d.runtime === "native" ? "native" : "docker"}</span>
                     {d.gpuDevices.length > 0 && (
                       <span>
                         GPU {d.gpuDevices.join(",")}
@@ -884,7 +1116,7 @@ export default function ServerPanel({
           <h3>Quick status</h3>
           <p className="muted">
             {serverStatus.activeCount} active server{serverStatus.activeCount !== 1 ? "s" : ""}
-            {serverStatus.baseUrl && <> · primary at {serverStatus.baseUrl}</>}
+            {serverStatus.gatewayUrl && <> · gateway at {serverStatus.gatewayUrl}/v1</>}
           </p>
         </section>
       )}

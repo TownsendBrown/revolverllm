@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "llamaCppRepo": "https://github.com/ggml-org/llama.cpp.git",
+  "llamaCppTag": "b10423",
+  "packs": [
+    {
+      "id": "linux-cuda-sm70",
+      "label": "CUDA Volta (sm_70)",
+      "os": "linux",
+      "cpuArch": "x86_64",
+      "backend": "cuda",
+      "cudaArchitectures": "70-real",
+      "matchComputeCaps": [70],
+      "expectSms": ["sm_70"],
+      "gpus": ["Tesla V100", "TITAN V", "Quadro GV100"],
+      "status": "supported"
+    },
+    {
+      "id": "linux-cuda-pascal",
+      "label": "CUDA Pascal (sm_60/61)",
+      "os": "linux",
+      "cpuArch": "x86_64",
+      "backend": "cuda",
+      "cudaArchitectures": "60-real;61-real",
+      "matchComputeCaps": [60, 61],
+      "expectSms": ["sm_60", "sm_61"],
+      "gpus": ["Tesla P100", "Tesla P40", "Tesla P4", "GTX 1080", "GTX 1070", "GTX 1060"],
+      "status": "supported"
+    }
+  ]
+}

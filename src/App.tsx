@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ConfigPanel from "./components/ConfigPanel";
 import ChatPanel from "./components/ChatPanel";
+import BenchmarkPanel from "./components/BenchmarkPanel";
 import Logo from "./components/Logo";
 import MonitorPanel from "./components/MonitorPanel";
 import ServerPanel from "./components/ServerPanel";
-import configIcon from "../icons/config-icon.v5.svg";
+import benchmarkIcon from "../icons/benchmark-icon.v2.svg";
+import configIcon from "../icons/config-icon.v6.svg";
 import chatIcon from "../icons/chat-icon.v1.svg";
 import monitorIcon from "../icons/monitor-icon.v2.svg";
 import serverIcon from "../icons/servers-icon.v2.svg";
@@ -12,11 +14,12 @@ import {
   api,
   type CatalogModel,
   type GpuInfo,
+  type PlatformCapabilities,
   type RevolverConfig,
   type ServerStatus,
 } from "./revolver";
 
-type Tab = "chat" | "config" | "monitor" | "server";
+type Tab = "chat" | "config" | "monitor" | "server" | "benchmarks";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("chat");
@@ -30,47 +33,95 @@ export default function App() {
   const [error, setError] = useState("");
   const [configVersion, setConfigVersion] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [repoRoot, setRepoRoot] = useState<string | null>(null);
+  const [dataDir, setDataDir] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<PlatformCapabilities | null>(null);
+  const [pendingChatServerId, setPendingChatServerId] = useState<string | null>(null);
+  const consumePendingChatServer = useCallback(() => setPendingChatServerId(null), []);
+  const statusEpoch = useRef(0);
+  const hasLoaded = useRef(false);
+  const anyLoadingRef = useRef(false);
+
+  const applyServerStatus = useCallback((s: ServerStatus, epoch: number) => {
+    if (epoch === statusEpoch.current) setServerStatus(s);
+  }, []);
+
+  const pullServerStatus = useCallback(() => {
+    const epoch = ++statusEpoch.current;
+    return api.getServerStatus().then((s) => {
+      applyServerStatus(s, epoch);
+      return s;
+    });
+  }, [applyServerStatus]);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     setError("");
     try {
       const paths = await api.getPaths();
       setConfig(paths.config);
       setConfigDraft(paths.config);
-      setRepoRoot(paths.repoRoot);
-      const [m, g, s] = await Promise.all([
+      setDataDir(paths.dataDir);
+      const epoch = ++statusEpoch.current;
+      const [m, g, s, p] = await Promise.all([
         api.getModels(),
         api.getGpu(),
         api.getServerStatus(),
+        api.getPlatform(),
       ]);
       setModels(m.models);
       setGpu(g);
-      setServerStatus(s);
-      setConfigVersion((v) => v + 1);
+      applyServerStatus(s, epoch);
+      setPlatform(p);
     } catch (e) {
       setError(String(e));
     } finally {
+      hasLoaded.current = true;
       setLoading(false);
     }
-  }, []);
+  }, [applyServerStatus]);
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
   }, [refresh]);
 
+  const anyLoading = Boolean(
+    busy === "load" ||
+      busy === "create" ||
+      busy === "start" ||
+      serverStatus?.loadPhase === "loading" ||
+      serverStatus?.servers?.some((s) => s.loadPhase === "loading"),
+  );
+  anyLoadingRef.current = anyLoading;
+
+  const shouldPoll =
+    tab === "server" ||
+    tab === "benchmarks" ||
+    tab === "chat" ||
+    Boolean(serverStatus?.activeCount) ||
+    anyLoading;
+
   useEffect(() => {
-    if (tab !== "server" && !serverStatus?.activeCount && busy !== "load" && busy !== "create") return;
-    const ms = busy === "load" || busy === "create" ? 500 : 1500;
-    const t = setInterval(() => {
-      api.getServerStatus().then(setServerStatus);
-    }, ms);
-    return () => clearInterval(t);
-  }, [tab, serverStatus?.activeCount, busy]);
+    if (!shouldPoll) return;
+    let stopped = false;
+    let id: ReturnType<typeof setTimeout>;
+    const loop = () => {
+      pullServerStatus()
+        .catch(() => {})
+        .finally(() => {
+          if (stopped) return;
+          id = setTimeout(loop, anyLoadingRef.current ? 500 : 1500);
+        });
+    };
+    loop();
+    return () => {
+      stopped = true;
+      clearTimeout(id);
+    };
+  }, [tab, shouldPoll, pullServerStatus]);
 
   const navIcons: Partial<Record<Tab, string>> = {
     chat: chatIcon,
+    benchmarks: benchmarkIcon,
     config: configIcon,
     monitor: monitorIcon,
     server: serverIcon,
@@ -78,6 +129,7 @@ export default function App() {
 
   const nav: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: "Chat", icon: ">" },
+    { id: "benchmarks", label: "Benchmarks", icon: "B" },
     { id: "server", label: "Server", icon: "#" },
     { id: "config", label: "Config", icon: "*" },
     { id: "monitor", label: "Monitor", icon: "=" },
@@ -92,6 +144,13 @@ export default function App() {
     api.openPath(path).then((err) => {
       if (err) setError(err);
     });
+
+  const dockerWarn =
+    platform?.os === "linux" && !platform.docker
+      ? `Docker is not available. Local servers need Docker.${
+          platform.dockerError ? ` ${platform.dockerError}` : ""
+        }`
+      : "";
 
   const canStopAll =
     Boolean(serverStatus?.activeCount) ||
@@ -112,8 +171,8 @@ export default function App() {
     },
     {
       label: "Open data folder",
-      disabled: !repoRoot,
-      action: () => (repoRoot ? openFolder(repoRoot) : undefined),
+      disabled: !dataDir,
+      action: () => (dataDir ? openFolder(dataDir) : undefined),
     },
     { label: "Refresh", action: refresh },
   ];
@@ -200,6 +259,7 @@ export default function App() {
         </header>
 
         {error && <div className="banner error">{error}</div>}
+        {dockerWarn && <div className="banner warn">{dockerWarn}</div>}
 
         {tab === "config" && configDraft && (
           <ConfigPanel
@@ -210,19 +270,41 @@ export default function App() {
             onSavePaths={() =>
               api.setConfig(configDraft).then((c) => {
                 setConfig(c);
-                refresh();
+                setConfigVersion((v) => v + 1);
+                void refresh();
               })
             }
-            onRefresh={refresh}
+            onRefresh={() => {
+              setConfigVersion((v) => v + 1);
+              void refresh();
+            }}
             onError={setError}
           />
         )}
 
-        {tab === "chat" && (
-          <ChatPanel serverStatus={serverStatus} onError={setError} />
-        )}
+        <div
+          className={tab === "chat" ? "tab-panel" : "tab-panel tab-hidden"}
+          aria-hidden={tab !== "chat"}
+          inert={tab !== "chat" ? true : undefined}
+        >
+          <ChatPanel
+            serverStatus={serverStatus}
+            servers={serverStatus?.servers ?? []}
+            pendingServerId={pendingChatServerId}
+            visible={tab === "chat"}
+            onPendingServerConsumed={consumePendingChatServer}
+            onError={setError}
+          />
+        </div>
 
         {tab === "monitor" && <MonitorPanel />}
+
+        {tab === "benchmarks" && (
+          <BenchmarkPanel
+            servers={serverStatus?.servers ?? []}
+            onError={setError}
+          />
+        )}
 
         {tab === "server" && (
           <ServerPanel
@@ -232,8 +314,9 @@ export default function App() {
             configVersion={configVersion}
             busy={busy}
             setBusy={setBusy}
-            onRefresh={refresh}
+            onRefresh={pullServerStatus}
             onError={setError}
+            onServerReady={setPendingChatServerId}
           />
         )}
       </main>

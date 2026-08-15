@@ -8,7 +8,7 @@ const nodeBuiltins = [
   ...builtinModules.map((m) => `node:${m}`),
 ];
 
-const mainExternal = ["electron", "@huggingface/gguf", "better-sqlite3", "js-yaml", ...nodeBuiltins];
+const mainExternal = ["electron", "better-sqlite3", ...nodeBuiltins];
 
 export default defineConfig({
   // Relative paths so loadFile() resolves bundled assets under file://

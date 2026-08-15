@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type MonitorSnapshot } from "../revolver";
+import { vendorLabel } from "../../shared/gpuDevices";
 
 function gb(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
@@ -188,9 +189,12 @@ export default function MonitorPanel() {
               </p>
               <div className="monitor-gpu-grid">
                 {gpu.devices.map((d) => (
-                  <div key={d.index} className="monitor-gpu-card">
+                  <div key={`${d.vendor}-${d.index}`} className="monitor-gpu-card">
                     <div className="monitor-gpu-head">
-                      <strong>GPU {d.index}</strong>
+                      <strong>
+                        GPU {d.index}{" "}
+                        <span className={`gpu-vendor ${d.vendor}`}>{vendorLabel(d.vendor)}</span>
+                      </strong>
                       <span className="muted">{d.name}</span>
                     </div>
                     <UtilBar

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { RevolverApi } from "../../shared/types";
+import type { RevolverApi } from "../shared/types";
 
 const api: RevolverApi = {
   getPaths: () => ipcRenderer.invoke("revolver:getPaths"),
@@ -65,6 +65,23 @@ const api: RevolverApi = {
       });
   },
   openPath: (path) => ipcRenderer.invoke("revolver:openPath", path),
+  focusWindow: () => ipcRenderer.invoke("revolver:focusWindow"),
+  listBenchmarkDefinitions: () => ipcRenderer.invoke("revolver:listBenchmarkDefinitions"),
+  listBenchmarkRuns: () => ipcRenderer.invoke("revolver:listBenchmarkRuns"),
+  getBenchmarkRun: (id) => ipcRenderer.invoke("revolver:getBenchmarkRun", id),
+  startBenchmarkRun: (req) => ipcRenderer.invoke("revolver:startBenchmarkRun", req),
+  cancelBenchmarkRun: (id) => ipcRenderer.invoke("revolver:cancelBenchmarkRun", id),
+  deleteBenchmarkRun: (id) => ipcRenderer.invoke("revolver:deleteBenchmarkRun", id),
+  setBenchmarkHumanScore: (runId, testId, humanScore, humanMaxScore, humanNotes) =>
+    ipcRenderer.invoke("revolver:setBenchmarkHumanScore", {
+      runId,
+      testId,
+      humanScore,
+      humanMaxScore,
+      humanNotes,
+    }),
+  readBenchmarkArtifact: (runId, testId, filename) =>
+    ipcRenderer.invoke("revolver:readBenchmarkArtifact", { runId, testId, filename }),
 };
 
 contextBridge.exposeInMainWorld("revolver", api);

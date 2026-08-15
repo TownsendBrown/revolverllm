@@ -2,10 +2,15 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-native/
 data/
+websites/
 !data/.gitkeep
 *.pyc
 .env
 config.local.json
 models/
 .DS_Store
+backends/src/
+backends/dist/
+backends/build/

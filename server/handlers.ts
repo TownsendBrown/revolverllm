@@ -13,19 +13,43 @@ import { evaluateGuardrails, effectiveGpuLayers } from "../electron/lib/vram";
 import { DEFAULT_ENGINE, engineInfos, getEngine } from "../engines";
 import * as chatService from "../electron/lib/chatService";
 import { inferChatStream } from "../electron/lib/chatInfer";
-import type { CreateServerRequest, EngineId, GpuInfo, GuardrailResult, StreamDelta, VramEstimate } from "../shared/types";
+import type { CreateServerRequest, EngineId, GpuInfo, GuardrailResult, InferenceBackend, StreamDelta, VramEstimate } from "../shared/types";
+import { devicesForBackend, runtimeIndex, runtimeIndicesFromSelection, validateBackendDevices } from "../shared/gpuDevices";
 import { metalEnabled } from "./hostAgent";
 import { canDispatchOpenPath, dispatchOpenPath } from "./openPathDispatch";
 import { serverManager } from "./serverManager";
 import { hostPathsForDocker, runtimeHostOs } from "../shared/openPath";
+import { restartOpenAiGateway } from "./openaiGateway";
+import * as benchmarkRunner from "./benchmarkRunner";
+import { defaultRuntimeMode } from "../shared/runtimeMode";
+import { dockerHealth } from "./containerUtils";
+import { probeNativeRuntime } from "./llamaServerBin";
+import type { BenchmarkCategory } from "../shared/benchmarks/types";
 
 type GpuDevices = GpuInfo["devices"];
 
-function selectedDevices(gpu: GpuInfo, gpuDevices?: number[]): GpuDevices {
+function selectedDevices(
+  gpu: GpuInfo,
+  gpuDevices?: number[],
+  backend?: string | null,
+): GpuDevices {
   if (!gpu.available || gpu.devices.length === 0) return [];
-  if (!gpuDevices || gpuDevices.length === 0) return gpu.devices;
-  const sel = gpu.devices.filter((d) => gpuDevices.includes(d.index));
-  return sel.length ? sel : gpu.devices;
+  const pool =
+    backend && backend !== "cpu" && backend !== "metal"
+      ? devicesForBackend(gpu.devices, backend as InferenceBackend)
+      : gpu.devices;
+  const source = pool;
+  if (!gpuDevices || gpuDevices.length === 0) return source;
+  const byUnique = source.filter((d) => gpuDevices.includes(d.index));
+  if (byUnique.length) return byUnique;
+  if (backend && backend !== "cpu" && backend !== "metal") {
+    const byRuntime = source.filter((d) => {
+      const r = runtimeIndex(d, backend as InferenceBackend);
+      return r != null && gpuDevices.includes(r);
+    });
+    if (byRuntime.length) return byRuntime;
+  }
+  return source;
 }
 
 function loadedModelIds(): string[] {
@@ -59,7 +83,7 @@ export async function computeEstimate(opts: {
   const engineId = opts.engine ?? DEFAULT_ENGINE;
   const engine = getEngine(engineId);
   const gpu = await getGpuInfoAsync();
-  const devices = selectedDevices(gpu, opts.gpuDevices);
+  const devices = selectedDevices(gpu, opts.gpuDevices, opts.backend);
   const deviceCount = opts.gpuDeviceCount ?? (devices.length || null);
 
   const { estimate, contextLength, modelMaxContext } = await engine.memory.estimate({
@@ -180,11 +204,20 @@ export const handlers = {
     });
   },
   getGpu: () => getGpuInfoAsync(),
-  getPlatform: () => {
+  getPlatform: async () => {
     const metal = metalEnabled();
+    const docker = await dockerHealth();
+    const native = probeNativeRuntime();
     return {
       macMetal: metal,
       dockerGpu: process.env.LLAMA_GPU === "1",
+      docker: docker.available,
+      dockerError: docker.error,
+      native: native.available,
+      nativeError: native.error,
+      llamaServerBin: native.bin,
+      nativeBackendPack: native.packId ?? null,
+      defaultRuntime: defaultRuntimeMode(),
       os: runtimeHostOs(),
       canOpenPath: canDispatchOpenPath(),
       hostPaths: hostPathsForDocker(loadConfig()),
@@ -195,7 +228,11 @@ export const handlers = {
   getEngines: () => engineInfos(),
   listServers: () => serverManager.listStatuses(),
   getServerConfig: () => loadServerConfig(),
-  setServerConfig: (patch: Parameters<typeof saveServerConfig>[0]) => saveServerConfig(patch),
+  setServerConfig: async (patch: Parameters<typeof saveServerConfig>[0]) => {
+    const next = saveServerConfig(patch);
+    await restartOpenAiGateway();
+    return next;
+  },
   getRuntimeConfig: () => loadRuntimeConfig(),
   setRuntimeConfig: (patch: Parameters<typeof saveRuntimeConfig>[0]) => saveRuntimeConfig(patch),
   getServerStatus: async (serverId?: string) => {
@@ -250,6 +287,11 @@ export const handlers = {
     };
   },
   createServer: async (opts: CreateServerRequest) => {
+    const gpu = await getGpuInfoAsync();
+    const gpuErr = validateBackendDevices(opts.backend, gpu.devices, opts.gpuDevices);
+    if (gpuErr) throw new Error(gpuErr);
+    const gpuDevices = runtimeIndicesFromSelection(gpu.devices, opts.gpuDevices, opts.backend);
+    const createOpts = { ...opts, gpuDevices };
     if (!opts.force) {
       const { guardrail } = await computeEstimate({
         modelId: opts.modelId,
@@ -273,7 +315,7 @@ export const handlers = {
       backendId: opts.backend,
       lastModelId: opts.modelId,
     });
-    return serverManager.createAndStart(opts);
+    return serverManager.createAndStart(createOpts);
   },
   startServer: (serverId: string, force?: boolean) => serverManager.startServer(serverId, force),
   stopServer: (serverId: string) => serverManager.stopServer(serverId),
@@ -309,7 +351,13 @@ export const handlers = {
   chat: async (messages: Array<{ role: string; content: string }>, serverId?: string) => {
     await ensureModelForRequest(serverId);
     const target = await serverManager.inferTarget(serverId);
-    return inferChatStream(messages, { ...target, onDelta: () => {} });
+    const loaded = serverManager.getLoaded(serverId ?? undefined);
+    return inferChatStream(messages, {
+      ...target,
+      contextLength: loaded?.contextLength,
+      modelHints: [loaded?.modelId, loaded?.modelPath],
+      onDelta: () => {},
+    });
   },
   listConversations: () => chatService.listConversations(),
   createConversation: (meta: Parameters<typeof chatService.createConversation>[0] = {}) =>
@@ -344,7 +392,9 @@ export const handlers = {
       (messages, deltaCb) =>
         inferChatStream(messages, {
           ...target,
+          contextLength: meta.contextLength,
           enableThinking: enableThinking === true,
+          modelHints: [meta.modelId, meta.modelPath, meta.modelDisplayName],
           onDelta: deltaCb ?? onDelta ?? (() => {}),
         }),
       meta,
@@ -352,4 +402,35 @@ export const handlers = {
     );
   },
   openPath: (p: string) => dispatchOpenPath(p),
+  listBenchmarkDefinitions: () => benchmarkRunner.listBenchmarkDefinitions(),
+  listBenchmarkRuns: () => benchmarkRunner.listBenchmarkRuns(),
+  getBenchmarkRun: (id: string) => {
+    const run = benchmarkRunner.getBenchmarkRun(id);
+    if (!run) throw new Error("Benchmark run not found");
+    return run;
+  },
+  startBenchmarkRun: (req: Parameters<typeof benchmarkRunner.startBenchmarkRun>[0]) =>
+    benchmarkRunner.startBenchmarkRun(req),
+  cancelBenchmarkRun: (id: string) => {
+    benchmarkRunner.cancelBenchmarkRun(id);
+    return benchmarkRunner.getBenchmarkRun(id);
+  },
+  deleteBenchmarkRun: (id: string) => benchmarkRunner.deleteBenchmarkRun(id),
+  setBenchmarkHumanScore: (
+    runId: string,
+    testId: BenchmarkCategory,
+    humanScore: number,
+    humanMaxScore?: number,
+    humanNotes?: string,
+  ) => benchmarkRunner.setHumanScore(runId, testId, humanScore, humanMaxScore, humanNotes),
+  getBenchmarkArtifact: (runId: string, relPath: string) => {
+    const buf = benchmarkRunner.getArtifactContent(runId, relPath);
+    if (!buf) throw new Error("Artifact not found");
+    return buf;
+  },
+  readBenchmarkArtifact: (runId: string, testId: string, filename: string) => {
+    const buf = benchmarkRunner.getArtifactContent(runId, `${testId}/${filename}`);
+    if (!buf) throw new Error("Artifact not found");
+    return buf.toString("utf8");
+  },
 };

@@ -9,9 +9,16 @@ export function conversationIdFromUrl(): string | null {
 
 export function setConversationUrl(id: string | null): void {
   const next = id ? `${HASH_PREFIX}${id}` : "";
-  if (window.location.hash === next) return;
-  const url = `${window.location.pathname}${window.location.search}${next}`;
+  if (id) {
+    if (window.location.hash === next) return;
+    const url = `${window.location.pathname}${window.location.search}${next}`;
+    window.history.replaceState(null, "", url);
+    return;
+  }
+  if (!window.location.hash) return;
+  const url = `${window.location.pathname}${window.location.search}`;
   window.history.replaceState(null, "", url);
+  if (window.location.hash) window.location.hash = "";
 }
 
 export function conversationUrl(id: string): string {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type ChatConversation,
@@ -7,8 +7,9 @@ import {
   type ServerInstanceStatus,
   type ServerStatus,
 } from "../revolver";
-import { resolveSupportsReasoning, estimateTokens } from "../../shared/reasoning";
+import { resolveSupportsReasoning, modelUsesHarmonyChannels, estimateTokens } from "../../shared/reasoning";
 import { publishChatEvent, subscribeChatEvents, type ChatSyncEvent } from "../lib/chatSync";
+import { useStickyScroll } from "../lib/useStickyScroll";
 import {
   conversationIdFromUrl,
   conversationUrl,
@@ -20,6 +21,10 @@ import ReasoningTrace from "./ReasoningTrace";
 
 interface Props {
   serverStatus: ServerStatus | null;
+  servers: ServerInstanceStatus[];
+  pendingServerId: string | null;
+  visible: boolean;
+  onPendingServerConsumed: () => void;
   onError: (msg: string) => void;
 }
 
@@ -85,12 +90,18 @@ function metaFromServer(s: ServerInstanceStatus): ConversationMeta {
   };
 }
 
-export default function ChatPanel({ serverStatus, onError }: Props) {
+export default function ChatPanel({
+  serverStatus,
+  servers,
+  pendingServerId,
+  visible,
+  onPendingServerConsumed,
+  onError,
+}: Props) {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(() => conversationIdFromUrl());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeConv, setActiveConv] = useState<ChatConversation | null>(null);
-  const [runningServers, setRunningServers] = useState<ServerInstanceStatus[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>("");
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -100,13 +111,28 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [enableThinking, setEnableThinking] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const streamThinkingRef = useRef(false);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeIdRef = useRef<string | null>(activeId);
   const sendingRef = useRef(false);
   const remoteGenRef = useRef(false);
+  const ignoreHashRef = useRef(false);
   const streamAbortRef = useRef<AbortController | null>(null);
   const loadSeqRef = useRef(0);
+  const liveServerIdsRef = useRef<Set<string>>(new Set());
+
+  const runningServers = useMemo(
+    () =>
+      servers.filter(
+        (s) =>
+          s.running ||
+          s.loadPhase === "loading" ||
+          (pendingServerId != null && s.definition.id === pendingServerId),
+      ),
+    [servers, pendingServerId],
+  );
+  liveServerIdsRef.current = new Set(runningServers.map((s) => s.definition.id));
 
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -119,18 +145,6 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
   useEffect(() => {
     remoteGenRef.current = remoteGenerating;
   }, [remoteGenerating]);
-
-  const refreshServers = useCallback(async () => {
-    try {
-      const list = await api.listServers();
-      const running = list.filter((s) => s.running && s.loadPhase !== "loading");
-      setRunningServers(running);
-      return running;
-    } catch (e) {
-      onError(String(e));
-      return [];
-    }
-  }, [onError]);
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -155,11 +169,22 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
         if (!sendingRef.current) {
           setMessages(detail.messages);
         }
-        if (detail.conversation.serverId) {
-          setSelectedServerId(detail.conversation.serverId);
+        const convServer = detail.conversation.serverId;
+        if (convServer && liveServerIdsRef.current.has(convServer)) {
+          setSelectedServerId(convServer);
         }
       } catch (e) {
-        if (loadSeqRef.current === seq) onError(String(e));
+        if (loadSeqRef.current !== seq) return;
+        const msg = String(e);
+        if (/not found/i.test(msg)) {
+          activeIdRef.current = null;
+          setActiveId(null);
+          setActiveConv(null);
+          setMessages([]);
+          setConversationUrl(null);
+          return;
+        }
+        onError(msg);
       } finally {
         if (loadSeqRef.current === seq && !opts?.silent) setLoadingThread(false);
       }
@@ -168,8 +193,10 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
   );
 
   const abortStream = useCallback(() => {
-    streamAbortRef.current?.abort();
+    if (!streamAbortRef.current) return;
+    streamAbortRef.current.abort();
     streamAbortRef.current = null;
+    setSending(false);
   }, []);
 
   const switchConversation = useCallback(
@@ -242,13 +269,12 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
 
   useEffect(() => {
     loadList().catch((e) => onError(String(e)));
-    refreshServers().catch((e) => onError(String(e)));
 
     const urlId = conversationIdFromUrl();
     if (urlId) {
       loadThread(urlId).catch((e) => onError(String(e)));
     }
-  }, [loadList, refreshServers, loadThread, onError]);
+  }, [loadList, loadThread, onError]);
 
   useEffect(() => {
     return subscribeChatEvents(handleSyncEvent);
@@ -256,6 +282,11 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
 
   useEffect(() => {
     return subscribeConversationUrl((id) => {
+      if (ignoreHashRef.current) {
+        ignoreHashRef.current = false;
+        if (id !== activeIdRef.current) setConversationUrl(activeIdRef.current);
+        return;
+      }
       if (id === activeIdRef.current) return;
       switchConversation(id);
     });
@@ -266,13 +297,6 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
     if (activeId === urlId) return;
     setConversationUrl(activeId);
   }, [activeId]);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      refreshServers().catch(() => {});
-    }, 3000);
-    return () => clearInterval(t);
-  }, [refreshServers]);
 
   useEffect(() => {
     const poll = () => {
@@ -294,21 +318,35 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
   }, [loadList, refreshActiveThread, serverStatus?.generation?.stage, messages, sending]);
 
   useEffect(() => {
-    if (selectedServerId && runningServers.some((s) => s.definition.id === selectedServerId)) {
-      return;
-    }
-    const fromConv = activeConv?.serverId;
-    if (fromConv && runningServers.some((s) => s.definition.id === fromConv)) {
-      setSelectedServerId(fromConv);
-      return;
-    }
-    if (runningServers[0]) setSelectedServerId(runningServers[0].definition.id);
-    else setSelectedServerId("");
-  }, [runningServers, activeConv?.serverId, selectedServerId]);
+    if (!pendingServerId) return;
+    setSelectedServerId(pendingServerId);
+    if (!visible) return;
+    ignoreHashRef.current = true;
+    abortStream();
+    switchConversation(null);
+    setConversationUrl(null);
+    onPendingServerConsumed();
+  }, [visible, pendingServerId, abortStream, switchConversation, onPendingServerConsumed]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending, remoteGenerating]);
+    const live = (id: string | null | undefined) =>
+      !!id && runningServers.some((s) => s.definition.id === id);
+    if (pendingServerId && live(pendingServerId)) {
+      if (selectedServerId !== pendingServerId) setSelectedServerId(pendingServerId);
+      return;
+    }
+    if (live(selectedServerId)) return;
+    const fromConv = activeConv?.serverId;
+    if (live(fromConv)) {
+      setSelectedServerId(fromConv!);
+      return;
+    }
+    const ready =
+      runningServers.find((s) => s.running && s.loadPhase !== "loading") ?? runningServers[0];
+    setSelectedServerId(ready?.definition.id ?? "");
+  }, [runningServers, activeConv?.serverId, selectedServerId, pendingServerId]);
+
+  useStickyScroll(messagesRef, [messages, sending, remoteGenerating], { resetKey: activeId });
 
   const selectedServer = runningServers.find((s) => s.definition.id === selectedServerId) ?? null;
   const thinkingSupported = resolveSupportsReasoning({
@@ -321,6 +359,13 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
       selectedServer?.loaded?.modelPath,
     ],
   });
+  const harmonyModel = modelUsesHarmonyChannels(
+    selectedServer?.definition.modelId,
+    selectedServer?.definition.modelPath,
+    selectedServer?.definition.name,
+    selectedServer?.loaded?.modelId,
+    selectedServer?.loaded?.modelPath,
+  );
   const contextLimit =
     selectedServer?.nCtx ??
     selectedServer?.definition.contextLength ??
@@ -348,22 +393,17 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
     }
   };
 
-  const newChat = async () => {
-    try {
-      abortStream();
-      const meta = selectedServer ? metaFromServer(selectedServer) : {};
-      const conv = await api.createConversation(meta);
-      setConversations((prev) => [conv, ...prev]);
-      activeIdRef.current = conv.id;
-      setActiveId(conv.id);
-      setActiveConv(conv);
-      setMessages([]);
-      setRemoteGenerating(false);
-      publishChatEvent({ type: "conversation:created", conversationId: conv.id });
-      textareaRef.current?.focus();
-    } catch (e) {
-      onError(String(e));
-    }
+  const newChat = (serverId?: string) => {
+    ignoreHashRef.current = true;
+    abortStream();
+    switchConversation(null);
+    setConversationUrl(null);
+    const preferred =
+      (serverId && runningServers.some((s) => s.definition.id === serverId) && serverId) ||
+      [...runningServers].sort((a, b) =>
+        b.definition.updatedAt.localeCompare(a.definition.updatedAt),
+      )[0]?.definition.id;
+    if (preferred) setSelectedServerId(preferred);
   };
 
   const selectConv = (id: string) => {
@@ -428,6 +468,8 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
 
     let convId = activeId;
     const streamId = `stream-${Date.now()}`;
+    const thinkOn = thinkingSupported && enableThinking;
+    streamThinkingRef.current = thinkOn;
 
     try {
       if (!convId) {
@@ -472,7 +514,7 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
 
       const result = await api.sendMessage(convId, text, {
         serverId: selectedServerId,
-        enableThinking: thinkingSupported && enableThinking,
+        enableThinking: thinkOn,
         signal: abort.signal,
         onDelta: (delta) => {
           if (activeIdRef.current !== convId) return;
@@ -482,9 +524,10 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
               return {
                 ...m,
                 content: delta.content ? m.content + delta.content : m.content,
-                reasoning: delta.reasoning
-                  ? (m.reasoning ?? "") + delta.reasoning
-                  : m.reasoning,
+                reasoning:
+                  streamThinkingRef.current && delta.reasoning
+                    ? (m.reasoning ?? "") + delta.reasoning
+                    : m.reasoning,
               };
             }),
           );
@@ -541,8 +584,10 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
       onError(errMsg);
       setInput(text);
     } finally {
-      if (streamAbortRef.current === abort) streamAbortRef.current = null;
-      setSending(false);
+      if (streamAbortRef.current === abort) {
+        streamAbortRef.current = null;
+        setSending(false);
+      }
     }
   };
 
@@ -552,18 +597,30 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
     serverStatus?.loaded?.modelId?.split("/").pop() ??
     null;
 
-  const canSend = !!selectedServerId && runningServers.length > 0;
+  const selectedReady =
+    !!selectedServer &&
+    selectedServer.running &&
+    selectedServer.loadPhase !== "loading";
+  const canSend = selectedReady;
   const awaitingReply =
     !sending &&
     messages.length > 0 &&
     messages[messages.length - 1]?.role === "user" &&
-    serverStatus?.generation?.stage === "generating";
+    selectedServer?.loadPhase === "inferring";
   const inputLocked = !canSend || sending || remoteGenerating || awaitingReply;
+
+  useEffect(() => {
+    if (!visible || inputLocked) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    const id = window.setTimeout(() => el.focus({ preventScroll: true }), 0);
+    return () => clearTimeout(id);
+  }, [visible, inputLocked]);
 
   return (
     <div className="chat-shell">
       <aside className="chat-sidebar">
-        <button className="chat-new-btn" onClick={newChat} disabled={!canSend}>
+        <button className="chat-new-btn" onClick={() => newChat()}>
           + New chat
         </button>
         <div className="chat-conv-list">
@@ -650,7 +707,10 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
                 >
                   {runningServers.map((s) => (
                     <option key={s.definition.id} value={s.definition.id}>
-                      {s.definition.name} · {s.definition.backend.toUpperCase()} · :{s.definition.hostPort}
+                      {s.definition.name} · {s.definition.backend.toUpperCase()}
+                      {s.loadPhase === "loading"
+                        ? " · loading…"
+                        : ` · :${s.definition.hostPort}`}
                     </option>
                   ))}
                 </select>
@@ -674,7 +734,7 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
           </div>
         )}
 
-        <div className="chat-messages">
+        <div ref={messagesRef} className="chat-messages">
           {loadingThread && <p className="muted center">Loading messages…</p>}
           {!loadingThread && messages.length === 0 && (
             <div className="chat-welcome">
@@ -682,7 +742,9 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
               <p className="muted">
                 {canSend
                   ? "Pick a live server above and start typing. Output streams as it generates."
-                  : "Start a server on the Server tab, then come back here."}
+                  : selectedServer?.loadPhase === "loading"
+                    ? "Model is still loading. Chat unlocks when it is ready."
+                    : "Start a server on the Server tab, then pick it above."}
               </p>
             </div>
           )}
@@ -693,7 +755,10 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
                 {m.role === "assistant" ? (
                   <>
                     {(m.reasoning ||
-                      (m.id.startsWith("stream-") && sending && enableThinking && !m.content)) && (
+                      (m.id.startsWith("stream-") &&
+                        sending &&
+                        streamThinkingRef.current &&
+                        !m.content)) && (
                       <ReasoningTrace
                         reasoning={m.reasoning ?? ""}
                         streaming={m.id.startsWith("stream-") && sending && !m.content}
@@ -739,7 +804,6 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
               </div>
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
         <div className="chat-composer">
@@ -778,19 +842,23 @@ export default function ChatPanel({ serverStatus, onError }: Props) {
                     ? "Message…"
                     : "Start a server to chat"
             }
-            disabled={inputLocked}
+            readOnly={inputLocked}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send();
+                if (!inputLocked) send();
               }
             }}
           />
           {thinkingSupported && (
             <label
               className={`chat-thinking-toggle ${enableThinking ? "on" : ""}`}
-              title="Ask the model to show its reasoning before the reply"
+              title={
+                harmonyModel
+                  ? "Show Harmony analysis trace (gpt-oss still thinks internally when off)"
+                  : "Ask the model to reason before replying"
+              }
             >
               <input
                 type="checkbox"

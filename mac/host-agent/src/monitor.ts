@@ -93,6 +93,12 @@ export function getHostGpuInfo(): GpuInfo {
         memUtilPercent: usedPercent,
         temperatureC: null,
         powerW: null,
+        vendor: "apple",
+        recommendedBackend: "metal",
+        arch: null,
+        nvidiaIndex: null,
+        amdIndex: null,
+        vulkanIndex: null,
       },
     ],
   };

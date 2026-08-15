@@ -3,7 +3,8 @@ import { getRevolverRoot } from "./appRoot";
 import { getDataDir } from "./config";
 import { getGpuInfo } from "./gpu";
 
-/** Default env for Electron — orchestrate llama-server via Docker like compose backend. */
+/** Default env for Electron. Docker CLI is used when a server's runtime is docker;
+ * native servers spawn llama-server on the host instead. */
 export function applyElectronDockerEnv(): void {
   process.env.REVOLVER_DOCKER = "1";
   if (!process.env.REVOLVER_ROOT) process.env.REVOLVER_ROOT = getRevolverRoot();

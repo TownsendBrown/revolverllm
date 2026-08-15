@@ -1,6 +1,7 @@
 import { generationTracker } from "./generation";
-import { splitThinkTags } from "../../shared/reasoning";
+import { estimateTokens, modelUsesHarmonyChannels, splitAssistantOutput } from "../../shared/reasoning";
 import type { EngineId, StreamDelta } from "../../shared/types";
+import { DEFAULT_CONTEXT_LENGTH } from "./contextLength";
 
 export type InferTarget = {
   host: string;
@@ -12,7 +13,31 @@ export type InferTarget = {
   markActivity?: () => void;
   /** Per-request thinking toggle (chat_template_kwargs.enable_thinking). */
   enableThinking?: boolean;
+  /** Model id/path hints — used to pick Harmony vs enable_thinking semantics. */
+  modelHints?: Array<string | null | undefined>;
+  /** Server context window — used to size max_tokens from remaining headroom. */
+  contextLength?: number | null;
 };
+
+/** Rough prompt size for max_tokens budgeting (template overhead included). */
+function estimatePromptTokens(messages: Array<{ role: string; content: string }>): number {
+  let total = 0;
+  for (const m of messages) {
+    total += estimateTokens(m.content) + 4;
+  }
+  return total;
+}
+
+/** Leave room for the prompt; always request at least 256 completion tokens. */
+export function computeMaxTokens(
+  messages: Array<{ role: string; content: string }>,
+  contextLength?: number | null,
+): number {
+  const ctx = contextLength && contextLength > 0 ? contextLength : DEFAULT_CONTEXT_LENGTH;
+  const prompt = estimatePromptTokens(messages);
+  const available = ctx - prompt - 64;
+  return Math.max(256, available);
+}
 
 /** Resolve the OpenAI model name for chat/completions. */
 export async function resolveInferenceModel(
@@ -126,21 +151,44 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
+/** OpenAI-compat thinking kwargs — Harmony models must not receive enable_thinking:false. */
+export function buildThinkingRequestParams(
+  enableThinking: boolean,
+  ...modelHints: Array<string | null | undefined>
+): Record<string, unknown> {
+  const harmony = modelUsesHarmonyChannels(...modelHints);
+  if (harmony) {
+    return enableThinking
+      ? { chat_template_kwargs: { enable_thinking: true }, enable_thinking: true }
+      : {};
+  }
+  return {
+    chat_template_kwargs: { enable_thinking: enableThinking },
+    enable_thinking: enableThinking,
+  };
+}
+
 /** Build metrics, server timings first, then usage+wallclock, then char heuristic. */
 function buildMetrics(opts: {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
   timings?: LlamaTimings;
   content: string;
+  reasoning?: string;
   genElapsedMs: number | null;
   ttftMs: number | null;
 }): InferMetrics {
-  const { usage, timings, content, genElapsedMs, ttftMs } = opts;
+  const { usage, timings, content, reasoning, genElapsedMs, ttftMs } = opts;
 
   const promptTokens = usage?.prompt_tokens ?? timings?.prompt_n ?? null;
-  const completionTokens =
+  const textLen = content.length + (reasoning?.length ?? 0);
+  let completionTokens =
     usage?.completion_tokens ??
     timings?.predicted_n ??
-    (content ? Math.ceil(content.length / 4) : null);
+    (textLen > 0 ? Math.ceil(textLen / 4) : null);
+  // gpt-oss may report completion_tokens=0 when output went to reasoning_content only.
+  if ((completionTokens == null || completionTokens === 0) && textLen > 0) {
+    completionTokens = Math.ceil(textLen / 4);
+  }
 
   let tokensPerSecond: number | null = null;
   if (timings?.predicted_per_second != null) {
@@ -169,6 +217,7 @@ async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onDelta: (delta: StreamDelta) => void,
   startMs: number,
+  collectReasoning: boolean,
 ): Promise<InferResult> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -188,8 +237,10 @@ async function readSseStream(
     const chunk: StreamDelta = {};
     if (parsed.reasoning) {
       if (firstTokenAt == null) firstTokenAt = Date.now();
-      reasoning += parsed.reasoning;
-      chunk.reasoning = parsed.reasoning;
+      if (collectReasoning) {
+        reasoning += parsed.reasoning;
+        chunk.reasoning = parsed.reasoning;
+      }
     }
     if (parsed.content) {
       if (firstTokenAt == null) firstTokenAt = Date.now();
@@ -209,16 +260,20 @@ async function readSseStream(
   }
   if (buffer.trim()) consume(buffer);
 
-  // Fallback: some servers leave thoughts inline in content when format=none.
-  if (!reasoning && /<think|<\|think\|/i.test(content)) {
-    const split = splitThinkTags(content);
-    content = split.content;
-    reasoning = split.reasoning;
+  // Fallback: unparsed thoughts/channels inline in content (reasoning_format=none, etc.).
+  if (collectReasoning && (!reasoning || /<\|channel\|>/i.test(content))) {
+    const split = splitAssistantOutput(content);
+    if (split.reasoning) {
+      reasoning = reasoning ? `${reasoning}\n\n${split.reasoning}` : split.reasoning;
+    }
+    if (split.content || !reasoning) content = split.content;
+  } else if (!collectReasoning && /<\|channel\|>/i.test(content)) {
+    content = splitAssistantOutput(content).content;
   }
 
   const ttftMs = firstTokenAt != null ? firstTokenAt - startMs : null;
   const genElapsedMs = firstTokenAt != null ? Date.now() - firstTokenAt : null;
-  const metrics = buildMetrics({ usage, timings, content, genElapsedMs, ttftMs });
+  const metrics = buildMetrics({ usage, timings, content, reasoning, genElapsedMs, ttftMs });
 
   return {
     content: content || (reasoning ? "" : "(no response)"),
@@ -237,6 +292,7 @@ export async function inferChatStream(
   const startMs = Date.now();
   try {
     const enableThinking = opts.enableThinking === true;
+    const maxTokens = computeMaxTokens(messages, opts.contextLength);
     const res = await fetch(`http://${opts.host}:${opts.port}/v1/chat/completions`, {
       method: "POST",
       headers: {
@@ -247,13 +303,9 @@ export async function inferChatStream(
         model: opts.model ?? "local",
         messages,
         stream: true,
-        max_tokens: 2048,
-        // Ask llama.cpp for the trailing usage chunk; it also attaches `timings`.
+        max_tokens: maxTokens,
         stream_options: { include_usage: true },
-        // Per-request thinking (Qwen3 / DeepSeek / Gemma templates).
-        chat_template_kwargs: { enable_thinking: enableThinking },
-        // Some OpenAI-compat stacks accept this alias.
-        enable_thinking: enableThinking,
+        ...buildThinkingRequestParams(enableThinking, ...(opts.modelHints ?? [])),
       }),
     });
     opts.markActivity?.();
@@ -264,7 +316,7 @@ export async function inferChatStream(
     }
     if (!res.body) throw new Error("No response body from llama-server");
 
-    const result = await readSseStream(res.body, opts.onDelta, startMs);
+    const result = await readSseStream(res.body, opts.onDelta, startMs, enableThinking);
     generationTracker.finish(result.metrics);
     return result;
   } catch (e) {

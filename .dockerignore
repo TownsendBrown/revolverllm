@@ -6,8 +6,12 @@ dist-electron
 release
 data
 models
+websites
 REFERENCE
 **/*.log
 .DS_Store
 .vscode
 .idea
+backends/src
+backends/dist
+backends/build

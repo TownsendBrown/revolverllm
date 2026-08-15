@@ -3,9 +3,42 @@ import { describe, it } from "node:test";
 import {
   chatTemplateSupportsReasoning,
   modelLikelySupportsReasoning,
+  modelUsesHarmonyChannels,
   resolveSupportsReasoning,
+  splitAssistantOutput,
+  splitHarmonyChannels,
   splitThinkTags,
 } from "./reasoning";
+import { buildThinkingRequestParams } from "../electron/lib/chatInfer";
+
+describe("modelUsesHarmonyChannels", () => {
+  it("matches gpt-oss ids", () => {
+    assert.equal(modelUsesHarmonyChannels("openai/gpt-oss-20b"), true);
+    assert.equal(modelUsesHarmonyChannels("/models/gpt-oss-20b/model.gguf"), true);
+    assert.equal(modelUsesHarmonyChannels("Qwen/Qwen3-8B"), false);
+  });
+});
+
+describe("buildThinkingRequestParams", () => {
+  it("sends explicit false for Qwen-style models", () => {
+    assert.deepEqual(buildThinkingRequestParams(false, "Qwen3-8B"), {
+      chat_template_kwargs: { enable_thinking: false },
+      enable_thinking: false,
+    });
+    assert.deepEqual(buildThinkingRequestParams(true, "Qwen3-8B"), {
+      chat_template_kwargs: { enable_thinking: true },
+      enable_thinking: true,
+    });
+  });
+
+  it("omits false for Harmony models but sends true when on", () => {
+    assert.deepEqual(buildThinkingRequestParams(false, "gpt-oss-20b"), {});
+    assert.deepEqual(buildThinkingRequestParams(true, "gpt-oss-20b"), {
+      chat_template_kwargs: { enable_thinking: true },
+      enable_thinking: true,
+    });
+  });
+});
 
 describe("modelLikelySupportsReasoning", () => {
   it("matches known reasoning model ids", () => {
@@ -78,5 +111,24 @@ describe("splitThinkTags", () => {
     const { content, reasoning } = splitThinkTags("<think>only thoughts</think>");
     assert.equal(reasoning, "only thoughts");
     assert.equal(content, "");
+  });
+});
+
+describe("splitHarmonyChannels", () => {
+  it("extracts analysis and final channels", () => {
+    const raw =
+      "<|start|>assistant<|channel|>analysis<|message|>step one<|end|>" +
+      "<|start|>assistant<|channel|>final<|message|>Hello!<|end|>";
+    const { content, reasoning } = splitHarmonyChannels(raw);
+    assert.equal(reasoning, "step one");
+    assert.equal(content, "Hello!");
+  });
+
+  it("delegates through splitAssistantOutput", () => {
+    const { content, reasoning } = splitAssistantOutput(
+      "<|channel|>analysis<|message|>think<|end|><|channel|>final<|message|>ok<|end|>",
+    );
+    assert.equal(reasoning, "think");
+    assert.equal(content, "ok");
   });
 });

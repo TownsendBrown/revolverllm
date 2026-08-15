@@ -10,6 +10,7 @@ export const VLLM_LEGACY_CAPABILITIES: EngineCapabilities = {
   supportsVulkan: false,
   supportsCPU: false,
   supportsMultiGPU: true,
+  supportsNative: false,
   api: "openai",
 };
 

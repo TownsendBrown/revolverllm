@@ -9,11 +9,30 @@ let db: Database.Database | null = null;
 function getDb(): Database.Database {
   if (db) return db;
   const path = join(getDataDir(), "chat.db");
-  db = new Database(path);
+  try {
+    db = new Database(path);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Cannot open chat database '${path}': ${msg}`);
+  }
+  if (db.readonly) {
+    db.close();
+    db = null;
+    throw new Error(
+      `Chat database is read-only: '${path}'. Fix ownership or set REVOLVER_DATA_DIR.`,
+    );
+  }
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
   initSchema(db);
   return db;
+}
+
+export function closeChatDb(): void {
+  if (!db) return;
+  db.close();
+  db = null;
 }
 
 function initSchema(database: Database.Database): void {

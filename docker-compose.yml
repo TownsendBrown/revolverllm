@@ -22,14 +22,18 @@ services:
     # compose network; it is not meant to be a remote surface (model containers are).
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3001}:3001"
+      - "127.0.0.1:${GATEWAY_PORT:-8081}:8081"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${MODELS_DIR:-./models}:/models
       - revolver-data:/app/data
       - llama-config:/llama-config
+      - /sys:/host/sys:ro
+      - /etc/group:/host/etc/group:ro
     environment:
       REVOLVER_ROOT: /app
       REVOLVER_DOCKER: "1"
+      REVOLVER_COMPOSE: "1"
       REVOLVER_MODELS_DIR: /models
       REVOLVER_HUB_MODELS_DIR: /models/hub
       REVOLVER_LOCAL_ROOT: /models/.revolver
@@ -45,7 +49,11 @@ services:
       # may differ, so spawned containers derive the host path from this mount.
       LLAMA_CONFIG_VOLUME: revolver_llama-config
       LLAMA_CONNECT_HOST: host.docker.internal
+      REVOLVER_GATEWAY_HOST: "0.0.0.0"
+      REVOLVER_GATEWAY_PORT: "8081"
       PORT: "3001"
+      # Host sysfs (Linux) so AMD GPUs are visible without the NVIDIA overlay.
+      REVOLVER_SYSFS: /host/sys
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -55,6 +63,23 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
+
+  # Coding-benchmark harness images (built with compose; run on demand by the backend).
+  livecodebench:
+    build:
+      context: ./docker/livecodebench
+    image: revolver/livecodebench:local
+    profiles: ["bench"]
+    entrypoint: ["true"]
+    restart: "no"
+
+  evalplus:
+    build:
+      context: ./docker/evalplus
+    image: revolver/evalplus:local
+    profiles: ["bench"]
+    entrypoint: ["true"]
+    restart: "no"
 
 volumes:
   revolver-data:

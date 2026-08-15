@@ -12,7 +12,10 @@ export type {
   EngineId,
   EngineInfo,
   GpuInfo,
+  GpuDevice,
+  GpuVendor,
   GpuMode,
+  ServerRuntimeMode,
   HubModel,
   InferenceBackend,
   LocalGgufModel,
@@ -21,6 +24,7 @@ export type {
   LocalPaths,
   LocalSettings,
   MonitorSnapshot,
+  PlatformCapabilities,
   RevolverConfig,
   RuntimeConfig,
   ServerConfig,
@@ -32,6 +36,12 @@ export type {
   StreamDelta,
   SystemInfo,
   VramEstimate,
+  BenchmarkCategory,
+  BenchmarkCheckResult,
+  BenchmarkDefinition,
+  BenchmarkRun,
+  BenchmarkTestResult,
+  StartBenchmarkRequest,
 } from "../shared/types";
 
 export const api: RevolverApi =

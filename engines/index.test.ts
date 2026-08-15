@@ -30,6 +30,9 @@ describe("engine registry", () => {
     const infos = engineInfos();
     assert.equal(infos.length, 3);
     assert.ok(infos.every((i) => i.capabilities.api === "openai"));
+    assert.equal(getEngine("llamacpp").capabilities.supportsNative, true);
+    assert.equal(getEngine("vllm").capabilities.supportsNative, false);
+    assert.equal(getEngine("vllm-legacy").capabilities.supportsNative, false);
   });
 });
 

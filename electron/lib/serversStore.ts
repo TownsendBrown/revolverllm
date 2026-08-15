@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { getDataDir } from "./config";
 import { normalizeModelPath } from "./modelPaths";
 import { effectiveGpuLayers } from "./vram";
-import type { EngineId, InferenceBackend, GpuMode, ServerDefinition } from "../../shared/types";
+import type { EngineId, InferenceBackend, GpuMode, ServerDefinition, ServerRuntimeMode } from "../../shared/types";
 
 const BASE_PORT = 8082;
 
@@ -92,6 +92,7 @@ export function createServerDefinition(opts: {
   name: string;
   engine?: EngineId;
   backend: InferenceBackend;
+  runtime?: ServerRuntimeMode;
   gpuDevices: number[];
   gpuMode: GpuMode;
   modelId: string;
@@ -109,6 +110,7 @@ export function createServerDefinition(opts: {
     name: opts.name,
     engine: opts.engine ?? "llamacpp",
     backend: opts.backend,
+    runtime: opts.runtime,
     gpuDevices: opts.gpuDevices,
     gpuMode: opts.gpuMode,
     modelId: opts.modelId,

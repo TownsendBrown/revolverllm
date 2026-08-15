@@ -7,7 +7,9 @@
     "skipLibCheck": true,
     "outDir": "dist-electron",
     "esModuleInterop": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "noEmit": true
   },
-  "include": ["electron", "shared"]
+  "include": ["electron", "shared", "server", "engines"],
+  "exclude": ["**/*.test.ts"]
 }

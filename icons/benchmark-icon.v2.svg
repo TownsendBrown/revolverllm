@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" shape-rendering="crispEdges" role="img" aria-label="Benchmarks">
+  <title>Benchmarks</title>
+
+  <!-- outer bevel -->
+  <rect width="48" height="48" fill="#c0c0c0"/>
+  <rect x="1" y="1" width="46" height="46" fill="#ece9d8"/>
+  <rect x="1" y="1" width="46" height="1" fill="#ffffff"/>
+  <rect x="1" y="1" width="1" height="46" fill="#ffffff"/>
+  <rect x="2" y="45" width="44" height="1" fill="#808080"/>
+  <rect x="45" y="2" width="1" height="44" fill="#808080"/>
+
+  <!-- inner panel -->
+  <rect x="4" y="4" width="40" height="30" fill="#ece9d8"/>
+  <rect x="4" y="4" width="40" height="1" fill="#808080"/>
+  <rect x="4" y="4" width="1" height="30" fill="#808080"/>
+  <rect x="43" y="5" width="1" height="28" fill="#ffffff"/>
+  <rect x="5" y="33" width="38" height="1" fill="#ffffff"/>
+
+  <!-- title bar -->
+  <rect x="5" y="5" width="38" height="7" fill="#000080"/>
+  <text x="7" y="10" font-family="Courier New, monospace" font-size="5" font-weight="700" fill="#ffffff">eval</text>
+  <rect x="36" y="6" width="5" height="5" fill="#c0c0c0"/>
+  <rect x="36" y="6" width="5" height="1" fill="#ffffff"/>
+  <rect x="36" y="6" width="1" height="5" fill="#ffffff"/>
+  <rect x="40" y="7" width="1" height="4" fill="#808080"/>
+  <rect x="37" y="10" width="3" height="1" fill="#808080"/>
+  <rect x="37" y="7" width="1" height="1" fill="#000000"/>
+  <rect x="39" y="7" width="1" height="1" fill="#000000"/>
+  <rect x="38" y="8" width="1" height="1" fill="#000000"/>
+  <rect x="37" y="9" width="1" height="1" fill="#000000"/>
+  <rect x="39" y="9" width="1" height="1" fill="#000000"/>
+
+  <!-- row 1: pass + bar -->
+  <rect x="6" y="14" width="5" height="5" fill="#008000"/>
+  <rect x="6" y="14" width="5" height="1" fill="#33cc33"/>
+  <rect x="6" y="14" width="1" height="5" fill="#33cc33"/>
+  <rect x="10" y="15" width="1" height="4" fill="#004400"/>
+  <rect x="7" y="18" width="3" height="1" fill="#004400"/>
+  <rect x="10" y="15" width="1" height="1" fill="#ffffff"/>
+  <rect x="9" y="16" width="1" height="1" fill="#ffffff"/>
+  <rect x="6" y="17" width="1" height="1" fill="#ffffff"/>
+  <rect x="8" y="17" width="1" height="1" fill="#ffffff"/>
+  <rect x="7" y="18" width="1" height="1" fill="#ffffff"/>
+  <rect x="12" y="15" width="30" height="3" fill="#0a0a0a"/>
+  <rect x="12" y="15" width="30" height="1" fill="#808080"/>
+  <rect x="12" y="15" width="1" height="3" fill="#808080"/>
+  <rect x="41" y="16" width="1" height="2" fill="#ffffff"/>
+  <rect x="13" y="17" width="28" height="1" fill="#ffffff"/>
+  <rect x="13" y="16" width="22" height="1" fill="#33ff33"/>
+
+  <!-- row 2: pass + bar -->
+  <rect x="6" y="21" width="5" height="5" fill="#008000"/>
+  <rect x="6" y="21" width="5" height="1" fill="#33cc33"/>
+  <rect x="6" y="21" width="1" height="5" fill="#33cc33"/>
+  <rect x="10" y="22" width="1" height="4" fill="#004400"/>
+  <rect x="7" y="25" width="3" height="1" fill="#004400"/>
+  <rect x="10" y="22" width="1" height="1" fill="#ffffff"/>
+  <rect x="9" y="23" width="1" height="1" fill="#ffffff"/>
+  <rect x="6" y="24" width="1" height="1" fill="#ffffff"/>
+  <rect x="8" y="24" width="1" height="1" fill="#ffffff"/>
+  <rect x="7" y="25" width="1" height="1" fill="#ffffff"/>
+  <rect x="12" y="22" width="30" height="3" fill="#0a0a0a"/>
+  <rect x="12" y="22" width="30" height="1" fill="#808080"/>
+  <rect x="12" y="22" width="1" height="3" fill="#808080"/>
+  <rect x="41" y="23" width="1" height="2" fill="#ffffff"/>
+  <rect x="13" y="24" width="28" height="1" fill="#ffffff"/>
+  <rect x="13" y="23" width="26" height="1" fill="#4ec9b0"/>
+
+  <!-- row 3: pass + bar -->
+  <rect x="6" y="28" width="5" height="5" fill="#008000"/>
+  <rect x="6" y="28" width="5" height="1" fill="#33cc33"/>
+  <rect x="6" y="28" width="1" height="5" fill="#33cc33"/>
+  <rect x="10" y="29" width="1" height="4" fill="#004400"/>
+  <rect x="7" y="32" width="3" height="1" fill="#004400"/>
+  <rect x="10" y="29" width="1" height="1" fill="#ffffff"/>
+  <rect x="9" y="30" width="1" height="1" fill="#ffffff"/>
+  <rect x="6" y="31" width="1" height="1" fill="#ffffff"/>
+  <rect x="8" y="31" width="1" height="1" fill="#ffffff"/>
+  <rect x="7" y="32" width="1" height="1" fill="#ffffff"/>
+  <rect x="12" y="29" width="30" height="3" fill="#0a0a0a"/>
+  <rect x="12" y="29" width="30" height="1" fill="#808080"/>
+  <rect x="12" y="29" width="1" height="3" fill="#808080"/>
+  <rect x="41" y="30" width="1" height="2" fill="#ffffff"/>
+  <rect x="13" y="31" width="28" height="1" fill="#ffffff"/>
+  <rect x="13" y="30" width="16" height="1" fill="#c8b4ff"/>
+
+  <!-- footer -->
+  <rect x="3" y="36" width="42" height="9" fill="#ece9d8"/>
+  <rect x="3" y="36" width="42" height="1" fill="#808080"/>
+  <rect x="3" y="36" width="1" height="9" fill="#808080"/>
+  <rect x="44" y="37" width="1" height="7" fill="#ffffff"/>
+  <rect x="4" y="44" width="40" height="1" fill="#ffffff"/>
+  <text x="24" y="42" text-anchor="middle" dominant-baseline="middle" font-family="Courier New, monospace" font-size="5" font-weight="700" fill="#000000">bench</text>
+</svg>

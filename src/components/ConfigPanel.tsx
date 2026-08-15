@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type GpuInfo, type RevolverConfig, type RuntimeConfig } from "../revolver";
+import { api, type GpuInfo, type RevolverConfig, type RuntimeConfig, type ServerConfig } from "../revolver";
+import { vendorLabel } from "../../shared/gpuDevices";
 
 type Props = {
   config: RevolverConfig | null;
@@ -25,9 +26,11 @@ export default function ConfigPanel({
   onError,
 }: Props) {
   const [runtimeDraft, setRuntimeDraft] = useState<RuntimeConfig | null>(null);
+  const [gatewayDraft, setGatewayDraft] = useState<ServerConfig | null>(null);
 
   useEffect(() => {
     api.getRuntimeConfig().then(setRuntimeDraft);
+    api.getServerConfig().then(setGatewayDraft);
   }, []);
 
   const saveRuntime = useCallback(async () => {
@@ -35,6 +38,12 @@ export default function ConfigPanel({
     await api.setRuntimeConfig(runtimeDraft);
     onRefresh();
   }, [runtimeDraft, onRefresh]);
+
+  const saveGateway = useCallback(async () => {
+    if (!gatewayDraft) return;
+    await api.setServerConfig(gatewayDraft);
+    onRefresh();
+  }, [gatewayDraft, onRefresh]);
 
   return (
     <div className="config-layout">
@@ -52,12 +61,18 @@ export default function ConfigPanel({
             </p>
             <div className="gpu-grid">
               {gpu.devices.map((d) => (
-                <div key={d.index} className="gpu-card">
-                  <strong>GPU {d.index}</strong>
+                <div key={`${d.vendor}-${d.index}`} className="gpu-card">
+                  <strong>
+                    GPU {d.index}{" "}
+                    <span className={`gpu-vendor ${d.vendor}`}>{vendorLabel(d.vendor)}</span>
+                  </strong>
                   <span>{d.name}</span>
                   <span>
                     {d.freeGb} / {d.totalGb} GB free
                   </span>
+                  {d.recommendedBackend && (
+                    <span className="muted small">Use {d.recommendedBackend.toUpperCase()}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -111,6 +126,77 @@ export default function ConfigPanel({
             </label>
             <button className="primary" onClick={saveRuntime}>
               Save defaults
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <h3>OpenAI gateway</h3>
+        <p className="muted">
+          Unified endpoint for external clients (Cline, Continue, etc.). Routes requests to running
+          servers by model name.
+        </p>
+        {gatewayDraft && (
+          <div className="config-form">
+            <label>
+              <input
+                type="checkbox"
+                checked={gatewayDraft.gatewayEnabled !== false}
+                onChange={(e) =>
+                  setGatewayDraft({ ...gatewayDraft, gatewayEnabled: e.target.checked })
+                }
+              />{" "}
+              Gateway enabled
+            </label>
+            <label>
+              Host
+              <input
+                value={gatewayDraft.host}
+                onChange={(e) => setGatewayDraft({ ...gatewayDraft, host: e.target.value })}
+              />
+              <span className="field-hint">Use 127.0.0.1 for local-only access.</span>
+            </label>
+            <label>
+              Port
+              <input
+                type="number"
+                min={1024}
+                max={65535}
+                value={gatewayDraft.port}
+                onChange={(e) =>
+                  setGatewayDraft({ ...gatewayDraft, port: Number(e.target.value) })
+                }
+              />
+            </label>
+            <label>
+              Gateway API key (optional)
+              <input
+                type="password"
+                value={gatewayDraft.gatewayApiKey ?? ""}
+                placeholder="Leave empty for open access"
+                onChange={(e) =>
+                  setGatewayDraft({
+                    ...gatewayDraft,
+                    gatewayApiKey: e.target.value.trim() || null,
+                  })
+                }
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={gatewayDraft.cors}
+                onChange={(e) => setGatewayDraft({ ...gatewayDraft, cors: e.target.checked })}
+              />{" "}
+              Enable CORS (browser clients)
+            </label>
+            <p className="mono small muted">
+              Base URL: http://{gatewayDraft.host === "0.0.0.0" ? "127.0.0.1" : gatewayDraft.host}:
+              {gatewayDraft.port}/v1
+            </p>
+            <button className="primary" onClick={saveGateway}>
+              Save gateway settings
             </button>
           </div>
         )}

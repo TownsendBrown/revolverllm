@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { createRequire } from "node:module";
 import { homedir } from "os";
-import { isAbsolute, join } from "path";
+import { dirname, isAbsolute, join } from "path";
 import { getRevolverRoot } from "./appRoot";
 
 export interface RevolverConfig {
@@ -10,6 +11,9 @@ export interface RevolverConfig {
 }
 
 const CONFIG_FILE = "config.json";
+const nodeRequire = createRequire(import.meta.url);
+
+let cachedDataDir: string | null = null;
 
 function homeDir(): string {
   return process.env.HOME ?? process.env.USERPROFILE ?? homedir();
@@ -112,16 +116,86 @@ function mergeStoredConfig(raw: Record<string, unknown>, defaults: RevolverConfi
   return defaults;
 }
 
+export function ensureDir(dir: string): string {
+  try {
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM") {
+      throw new Error(
+        `Cannot write directory '${dir}' (permission denied). ` +
+          `Fix ownership or set REVOLVER_DATA_DIR to a writable path.`,
+      );
+    }
+    throw e;
+  }
+}
+
+export function isDirWritable(dir: string): boolean {
+  try {
+    mkdirSync(dir, { recursive: true });
+    const probe = join(dir, `.write-test-${process.pid}`);
+    writeFileSync(probe, "");
+    unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Repo `data/` is only usable if we can create files and write chat.db when it exists. */
+export function isDataDirUsable(dir: string): boolean {
+  if (!isDirWritable(dir)) return false;
+  const dbPath = join(dir, "chat.db");
+  if (!existsSync(dbPath)) return true;
+  try {
+    accessSync(dbPath, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tryElectronApp(): { isPackaged: boolean; userData: string } | null {
+  if (!process.versions.electron) return null;
+  try {
+    const { app } = nodeRequire("electron") as typeof import("electron");
+    return { isPackaged: app.isPackaged, userData: app.getPath("userData") };
+  } catch {
+    return null;
+  }
+}
+
+export function isElectronPackaged(): boolean {
+  return tryElectronApp()?.isPackaged === true;
+}
+
+/** Pure data-dir resolution — packaged install, env override, or writable repo `data/`. */
+export function resolveDataDir(input: {
+  envDataDir?: string;
+  packaged: boolean;
+  userDataDir?: string;
+  repoRoot: string;
+  repoDataWritable: boolean;
+  fallbackDir: string;
+}): string {
+  if (input.envDataDir) return input.envDataDir;
+  if (input.packaged && input.userDataDir) return input.userDataDir;
+  if (input.repoDataWritable) return join(input.repoRoot, "data");
+  return input.fallbackDir;
+}
+
 export function ensureModelDirectories(cfg: RevolverConfig): void {
-  mkdirSync(cfg.modelsDir, { recursive: true });
-  mkdirSync(cfg.hubModelsDir, { recursive: true });
-  mkdirSync(cfg.localRoot, { recursive: true });
-  mkdirSync(join(cfg.localRoot, ".internal"), { recursive: true });
-  const dataDir = getDataDir();
-  mkdirSync(join(dataDir, "llama-config"), { recursive: true });
+  ensureDir(cfg.modelsDir);
+  ensureDir(cfg.hubModelsDir);
+  ensureDir(cfg.localRoot);
+  ensureDir(join(cfg.localRoot, ".internal"));
+  ensureDir(join(getDataDir(), "llama-config"));
 }
 
 function configPath(): string {
+  if (isElectronPackaged()) return join(getDataDir(), CONFIG_FILE);
   return join(getRevolverRoot(), CONFIG_FILE);
 }
 
@@ -158,16 +232,35 @@ export function loadConfig(): RevolverConfig {
 
 export function saveConfig(config: RevolverConfig): RevolverConfig {
   const path = configPath();
-  mkdirSync(getRevolverRoot(), { recursive: true });
+  ensureDir(dirname(path));
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
   ensureModelDirectories(config);
   return config;
 }
 
 export function getDataDir(): string {
-  const dir = join(getRevolverRoot(), "data");
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  if (cachedDataDir) return cachedDataDir;
+  const electron = tryElectronApp();
+  const repoRoot = getRevolverRoot();
+  const repoData = join(repoRoot, "data");
+  const dir = resolveDataDir({
+    envDataDir: process.env.REVOLVER_DATA_DIR,
+    packaged: electron?.isPackaged === true,
+    userDataDir: electron?.userData,
+    repoRoot,
+    repoDataWritable: isDataDirUsable(repoData),
+    fallbackDir: join(platformLocalRoot(), "data"),
+  });
+  if (dir !== repoData && dir !== process.env.REVOLVER_DATA_DIR && electron?.isPackaged !== true) {
+    console.warn(`[revolver] ${repoData} is not writable; using ${dir}`);
+  }
+  cachedDataDir = ensureDir(dir);
+  return cachedDataDir;
+}
+
+/** Test hook — do not use in production code. */
+export function resetDataDirCache(): void {
+  cachedDataDir = null;
 }
 
 /** Call once at Electron startup — loads config, creates folders, exports paths to env. */
@@ -181,6 +274,9 @@ export function initElectronConfig(): RevolverConfig {
   }
   if (!process.env.REVOLVER_LOCAL_ROOT) {
     process.env.REVOLVER_LOCAL_ROOT = cfg.localRoot;
+  }
+  if (!process.env.REVOLVER_DATA_DIR) {
+    process.env.REVOLVER_DATA_DIR = getDataDir();
   }
   return cfg;
 }

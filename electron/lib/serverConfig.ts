@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { getDataDir } from "./config";
@@ -6,6 +7,10 @@ export interface ServerConfig {
   port: number;
   host: string;
   cors: boolean;
+  /** Unified OpenAI-compatible gateway (Cline, etc.). Default on. */
+  gatewayEnabled: boolean;
+  /** Optional Bearer token required on gateway requests. null = open. */
+  gatewayApiKey: string | null;
   verbose: boolean;
   logLinesLimit: number;
   autoStartOnLaunch: boolean;
@@ -22,6 +27,8 @@ const DEFAULTS: ServerConfig = {
   port: 8081,
   host: "127.0.0.1",
   cors: false,
+  gatewayEnabled: true,
+  gatewayApiKey: null,
   verbose: true,
   logLinesLimit: 500,
   autoStartOnLaunch: false,
@@ -49,11 +56,16 @@ function readServerConfigFile(): ServerConfig {
   }
 }
 
+function generateGatewayApiKey(): string {
+  return randomBytes(24).toString("hex");
+}
+
 export function loadServerConfig(): ServerConfig {
   const path = configPath();
   if (!existsSync(path)) {
-    writeFileSync(path, JSON.stringify(DEFAULTS, null, 2));
-    return { ...DEFAULTS };
+    const initial: ServerConfig = { ...DEFAULTS, gatewayApiKey: generateGatewayApiKey() };
+    writeFileSync(path, JSON.stringify(initial, null, 2) + "\n");
+    return initial;
   }
   return readServerConfigFile();
 }

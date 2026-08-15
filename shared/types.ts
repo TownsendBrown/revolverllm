@@ -1,3 +1,10 @@
+import type {
+  BenchmarkCategory,
+  BenchmarkDefinition,
+  BenchmarkRun,
+  StartBenchmarkRequest,
+} from "./benchmarks/types";
+
 export interface ModelFile {
   path: string;
   relPath: string;
@@ -76,26 +83,41 @@ export interface VramEstimate {
   breakdown: Record<string, number>;
 }
 
+export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu" | "metal";
+export type GpuVendor = "nvidia" | "amd" | "intel" | "apple";
+
+export interface GpuDevice {
+  index: number;
+  name: string;
+  vendor: GpuVendor;
+  recommendedBackend: InferenceBackend;
+  /** ISA / marketing arch when known (e.g. gfx1010, navi10). */
+  arch?: string | null;
+  /** nvidia-smi index; set for NVIDIA devices. */
+  nvidiaIndex?: number | null;
+  /** 0-based AMD GPU order (HIP_VISIBLE_DEVICES). */
+  amdIndex?: number | null;
+  /** Vulkan physical-device index (GGML_VK_VISIBLE_DEVICES). */
+  vulkanIndex?: number | null;
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  totalGb: number;
+  freeGb: number;
+  usedPercent?: number | null;
+  gpuUtilPercent?: number | null;
+  memUtilPercent?: number | null;
+  temperatureC?: number | null;
+  powerW?: number | null;
+}
+
 export interface GpuInfo {
   available: boolean;
   error?: string;
   deviceCount: number;
   totalVramBytes: number;
   totalFreeVramBytes: number;
-  devices: Array<{
-    index: number;
-    name: string;
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-    totalGb: number;
-    freeGb: number;
-    usedPercent?: number | null;
-    gpuUtilPercent?: number | null;
-    memUtilPercent?: number | null;
-    temperatureC?: number | null;
-    powerW?: number | null;
-  }>;
+  devices: GpuDevice[];
 }
 
 export interface SystemInfo {
@@ -125,8 +147,8 @@ export interface MonitorSnapshot {
   gpu: GpuInfo;
 }
 
-export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu" | "metal";
 export type GpuMode = "single" | "combined";
+export type ServerRuntimeMode = "docker" | "native";
 
 /** Inference implementation (what runs the model). Orthogonal to InferenceBackend (how it executes). */
 export type EngineId = "llamacpp" | "vllm" | "vllm-legacy";
@@ -143,6 +165,8 @@ export interface EngineCapabilities {
   supportsVulkan: boolean;
   supportsCPU: boolean;
   supportsMultiGPU: boolean;
+  /** Host-process llama-server (no Docker). llama.cpp only. */
+  supportsNative: boolean;
   api: "openai";
 }
 
@@ -179,6 +203,8 @@ export interface ServerDefinition {
   /** Inference implementation. Omitted in persisted defs → llamacpp. */
   engine?: EngineId;
   backend: InferenceBackend;
+  /** docker (default) or native host process. Metal ignores this (always host-agent). */
+  runtime?: ServerRuntimeMode;
   gpuDevices: number[];
   gpuMode: GpuMode;
   modelId: string;
@@ -200,6 +226,7 @@ export interface CreateServerRequest {
   name?: string;
   engine?: EngineId;
   backend: InferenceBackend;
+  runtime?: ServerRuntimeMode;
   gpuDevices: number[];
   gpuMode?: GpuMode;
   modelId: string;
@@ -243,6 +270,8 @@ export interface ServerInstanceStatus {
   port: number;
   host: string;
   baseUrl: string;
+  /** Unified OpenAI gateway URL (fixed port, routes by model). */
+  gatewayUrl: string;
   endpoints: string[];
   logs: string[];
   logsFiltered: string[];
@@ -277,6 +306,7 @@ export interface ServerStatus {
   port: number;
   host: string;
   baseUrl: string;
+  gatewayUrl: string;
   endpoints: string[];
   logs: string[];
   logsFiltered: string[];
@@ -326,6 +356,8 @@ export interface ServerConfig {
   port: number;
   host: string;
   cors: boolean;
+  gatewayEnabled: boolean;
+  gatewayApiKey: string | null;
   verbose: boolean;
   logLinesLimit: number;
   autoStartOnLaunch: boolean;
@@ -366,6 +398,18 @@ export interface PlatformCapabilities {
   macMetal: boolean;
   /** True when the backend container was started with GPU support (LLAMA_GPU=1). */
   dockerGpu: boolean;
+  /** True when the Docker daemon is reachable. */
+  docker: boolean;
+  /** Last Docker probe error when `docker` is false. */
+  dockerError?: string;
+  /** True when a host llama-server binary is available and Compose is not pinning Docker. */
+  native: boolean;
+  nativeError?: string;
+  llamaServerBin?: string | null;
+  /** Installed CUDA pack id (e.g. linux-cuda-sm70). macOS Metal is not a pack. */
+  nativeBackendPack?: string | null;
+  /** Default for new servers (REVOLVER_RUNTIME or pack:native extraMetadata). */
+  defaultRuntime: ServerRuntimeMode;
   os: "darwin" | "linux" | "win32" | "other";
   /** True when openPath can reach the host file manager. */
   canOpenPath: boolean;
@@ -466,6 +510,18 @@ export interface SendMessageResult {
   assistantMessage: ChatMessage;
 }
 
+export type {
+  BenchmarkCategory,
+  BenchmarkCheckResult,
+  BenchmarkDefinition,
+  BenchmarkDefinitionVersion,
+  BenchmarkRun,
+  BenchmarkRunConfig,
+  BenchmarkRunStatus,
+  BenchmarkTestResult,
+  StartBenchmarkRequest,
+} from "./benchmarks/types";
+
 export interface RevolverApi {
   getPaths(): Promise<LocalPaths & { settings: LocalSettings; config: RevolverConfig }>;
   getConfig(): Promise<RevolverConfig>;
@@ -534,6 +590,22 @@ export interface RevolverApi {
     opts?: SendMessageOptions,
   ): Promise<SendMessageResult>;
   openPath(path: string): Promise<string>;
+  /** Electron: restore OS/webContents focus so chat inputs accept clicks after dialogs. */
+  focusWindow(): Promise<void>;
+  listBenchmarkDefinitions(): Promise<BenchmarkDefinition[]>;
+  listBenchmarkRuns(): Promise<BenchmarkRun[]>;
+  getBenchmarkRun(id: string): Promise<BenchmarkRun>;
+  startBenchmarkRun(req: StartBenchmarkRequest): Promise<BenchmarkRun>;
+  cancelBenchmarkRun(id: string): Promise<BenchmarkRun | null>;
+  deleteBenchmarkRun(id: string): Promise<void>;
+  setBenchmarkHumanScore(
+    runId: string,
+    testId: BenchmarkCategory,
+    humanScore: number,
+    humanMaxScore?: number,
+    humanNotes?: string,
+  ): Promise<BenchmarkRun>;
+  readBenchmarkArtifact(runId: string, testId: string, filename: string): Promise<string>;
 }
 
 declare global {

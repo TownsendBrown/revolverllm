@@ -6,6 +6,15 @@ const REASONING_MODEL_RE =
 const TEMPLATE_REASONING_RE =
   /enable_thinking|<think>|<\/think>|<\|think\|>|<\|\/think\|>|reasoning_content|reasoning_effort|thinking/i;
 
+/** Heuristic: Harmony-channel models (gpt-oss) — never send enable_thinking:false. */
+const HARMONY_MODEL_RE = /gpt-oss|openai-gpt-oss/i;
+
+export function modelUsesHarmonyChannels(
+  ...hints: Array<string | null | undefined>
+): boolean {
+  return hints.some((h) => Boolean(h && HARMONY_MODEL_RE.test(h)));
+}
+
 /** True when the loaded model is likely to honor enable_thinking / reasoning traces. */
 export function modelLikelySupportsReasoning(
   ...hints: Array<string | null | undefined>
@@ -38,6 +47,47 @@ export function resolveSupportsReasoning(opts: {
   if (opts.fromProps === true) return true;
   if (opts.fromProps === false) return false;
   return modelLikelySupportsReasoning(...(opts.hints ?? []));
+}
+
+/** Split gpt-oss Harmony channel markup when it appears inline in `content`. */
+export function splitHarmonyChannels(text: string): { content: string; reasoning: string } {
+  if (!text || !/<\|channel\|>/i.test(text)) {
+    return { content: text, reasoning: "" };
+  }
+
+  const reasoningParts: string[] = [];
+  const channelRe =
+    /<\|channel\|>(?:commentary\s+to=assistant\s+|commentary|analysis)<\|message\|>([\s\S]*?)<\|end\|>/gi;
+  for (const match of text.matchAll(channelRe)) {
+    const body = String(match[1]).trim();
+    if (body) reasoningParts.push(body);
+  }
+
+  const finalRe =
+    /<\|channel\|>final(?:<\|constrain\|>[^<|]*)?<(?:\|message\|>|message>)([\s\S]*?)(?:<\|end\|>|$)/i;
+  const finalMatch = finalRe.exec(text);
+  const content = finalMatch ? String(finalMatch[1]).trim() : "";
+
+  if (!reasoningParts.length && !content) {
+    const stripped = text
+      .replace(/<\|start\|>assistant/gi, "")
+      .replace(/<\|channel\|>[^<]*<\|message\|>/gi, "")
+      .replace(/<\|end\|>/gi, "")
+      .trim();
+    return { content: stripped, reasoning: "" };
+  }
+
+  return {
+    content,
+    reasoning: reasoningParts.filter(Boolean).join("\n\n"),
+  };
+}
+
+/** Apply think-tag and Harmony channel splitting to raw assistant output. */
+export function splitAssistantOutput(text: string): { content: string; reasoning: string } {
+  if (!text) return { content: "", reasoning: "" };
+  if (/<\|channel\|>/i.test(text)) return splitHarmonyChannels(text);
+  return splitThinkTags(text);
 }
 
 /** Split inline `<think>…</think>` (and common variants) out of assistant text. */

@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { handlers } from "./handlers";
 import { serverManager } from "./serverManager";
+import { startOpenAiGateway } from "./openaiGateway";
 
 const app = express();
 const port = Number(process.env.PORT ?? "3001");
@@ -251,6 +252,96 @@ app.post("/api/conversations/:id/messages/stream", async (req, res) => {
   }
 });
 
+app.get("/api/benchmarks/definitions", async (_req, res) => {
+  try {
+    res.json(await handlers.listBenchmarkDefinitions());
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get("/api/benchmarks/runs", async (_req, res) => {
+  try {
+    res.json(await handlers.listBenchmarkRuns());
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get("/api/benchmarks/runs/:id", async (req, res) => {
+  try {
+    res.json(await handlers.getBenchmarkRun(req.params.id));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+  }
+});
+
+app.post("/api/benchmarks/runs", async (req, res) => {
+  try {
+    res.json(await handlers.startBenchmarkRun(req.body ?? {}));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post("/api/benchmarks/runs/:id/cancel", async (req, res) => {
+  try {
+    res.json(await handlers.cancelBenchmarkRun(req.params.id));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.delete("/api/benchmarks/runs/:id", async (req, res) => {
+  try {
+    await handlers.deleteBenchmarkRun(req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post("/api/benchmarks/runs/:runId/tests/:testId/human-score", async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    res.json(
+      await handlers.setBenchmarkHumanScore(
+        req.params.runId,
+        req.params.testId as import("../shared/benchmarks/types").BenchmarkCategory,
+        Number(body.humanScore),
+        body.humanMaxScore != null ? Number(body.humanMaxScore) : undefined,
+        body.humanNotes != null ? String(body.humanNotes) : undefined,
+      ),
+    );
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+  }
+});
+
+function artifactContentType(filename: string): string {
+  if (filename.endsWith(".html")) return "text/html; charset=utf-8";
+  if (filename.endsWith(".ts") || filename.endsWith(".tsx")) return "text/plain; charset=utf-8";
+  if (filename.endsWith(".txt")) return "text/plain; charset=utf-8";
+  if (filename.endsWith(".json")) return "application/json; charset=utf-8";
+  return "application/octet-stream";
+}
+
+app.get("/api/benchmarks/runs/:runId/artifacts/:testId/:filename", async (req, res) => {
+  try {
+    const relPath = `${req.params.testId}/${req.params.filename}`;
+    const buf = await handlers.getBenchmarkArtifact(req.params.runId, relPath);
+    res.setHeader("Content-Type", artifactContentType(req.params.filename));
+    res.setHeader("Cache-Control", "no-cache");
+    res.send(buf);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+  }
+});
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true, docker: true });
 });
@@ -266,6 +357,11 @@ async function start(): Promise<void> {
     await serverManager.reconcile();
   } catch (e) {
     console.warn(`reconcile on boot failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await startOpenAiGateway();
+  } catch (e) {
+    console.warn(`OpenAI gateway failed to start: ${e instanceof Error ? e.message : String(e)}`);
   }
   app.listen(port, "0.0.0.0", () => {
     console.log(`revolver backend listening on :${port}`);

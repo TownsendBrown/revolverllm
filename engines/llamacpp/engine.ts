@@ -1,3 +1,5 @@
+import { join } from "path";
+import { getRevolverRoot } from "../../electron/lib/appRoot";
 import type { ServerDefinition } from "../../shared/types";
 import { backendSupported, type InferenceEngine } from "../types";
 import { LLAMACPP_CAPABILITIES, LLAMACPP_CONFIG_FIELDS } from "./capabilities";
@@ -33,6 +35,15 @@ export const llamacppEngine: InferenceEngine = {
   },
 
   containerSpec(def: ServerDefinition) {
+    // Persist the CUDA JIT (PTX→SASS) cache across container recreations.
+    // Containers run with --rm, so without a host mount the driver recompiles
+    // kernels on every load — a ~50s first-prefill stall on GPUs whose native
+    // SASS isn't shipped in the build (e.g. Volta sm_70).
+    const cudaCache =
+      def.backend === "cuda"
+        ? process.env.REVOLVER_CUDA_CACHE ??
+          join(getRevolverRoot(), "data", "cuda-cache")
+        : null;
     return {
       image: llamaImage(def.backend),
       containerPort: LLAMA_CONTAINER_PORT,
@@ -41,8 +52,11 @@ export const llamacppEngine: InferenceEngine = {
         LLAMA_CONFIG_DIR: "/config",
         LLAMA_ENV_FILE: llamaEnvFileName(def.id),
         BACKEND: def.backend,
+        ...(cudaCache
+          ? { CUDA_CACHE_PATH: "/root/.nv/ComputeCache", CUDA_CACHE_MAXSIZE: "4294967296" }
+          : {}),
       },
-      extraMounts: [],
+      extraMounts: cudaCache ? [{ source: cudaCache, target: "/root/.nv" }] : [],
       envFileName: llamaEnvFileName(def.id),
     };
   },

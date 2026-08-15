@@ -75,6 +75,10 @@ fi
 
 [ -n "\${CUDA_VISIBLE_DEVICES:-}" ] && export CUDA_VISIBLE_DEVICES
 [ -n "\${HIP_VISIBLE_DEVICES:-}" ] && export HIP_VISIBLE_DEVICES
+[ -n "\${ROCR_VISIBLE_DEVICES:-}" ] && export ROCR_VISIBLE_DEVICES
+[ -n "\${GGML_VK_VISIBLE_DEVICES:-}" ] && export GGML_VK_VISIBLE_DEVICES
+[ -n "\${VK_ICD_FILENAMES:-}" ] && export VK_ICD_FILENAMES
+[ -n "\${VK_LOADER_DRIVERS_DISABLE:-}" ] && export VK_LOADER_DRIVERS_DISABLE
 
 case "$MODEL" in
   "" | undefined | null) MODEL="" ;;
@@ -85,6 +89,10 @@ if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
     echo "llama-server: model file not found: $MODEL — idle (load via Revolver backend)"
   else
     echo "llama-server: no model configured — idle (load via Revolver backend)"
+  fi
+  # Native supervisor must not leave a sleep-infinity process around.
+  if [ "\${LLAMA_NATIVE:-}" = "1" ]; then
+    exit 0
   fi
   exec sleep infinity
 fi
@@ -102,6 +110,12 @@ set -- --host "$HOST" --port "$PORT" --model "$MODEL"
 [ -n "$API_KEY" ] && set -- "$@" --api-key "$API_KEY"
 case "$KV_UNIFIED" in
   1 | on | true | yes) set -- "$@" --kv-unified ;;
+esac
+# Jinja chat templates enable OpenAI-style tool calling (agency benchmark).
+# Opt out with JINJA=off for models whose templates misbehave.
+case "\${JINJA:-on}" in
+  0 | off | false | no) ;;
+  *) set -- "$@" --jinja ;;
 esac
 
 echo "llama-server starting: backend=$BACKEND model=$MODEL ctx=\${CTX:-default} gpu_layers=\${GPU_LAYERS:-0} flash_attn=\${FLASH:-default} kv=\${CACHE_K:-f16} parallel=\${N_PARALLEL:-auto} reasoning=\${REASONING:-auto} reasoning_format=\${REASONING_FORMAT:-auto} kv_unified=\${KV_UNIFIED:-default}"

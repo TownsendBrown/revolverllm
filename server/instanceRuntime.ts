@@ -1,22 +1,27 @@
 import { ServerLogBuffer } from "../electron/lib/serverLogs";
 import { existsSync } from "fs";
 import { filterLogLines, parseLastSpeedTps, parseLoadProgress } from "../electron/lib/serverLogParse";
-import { loadServerConfig, serverEndpoints } from "../electron/lib/serverConfig";
+import { loadServerConfig, serverBaseUrl, serverEndpoints } from "../electron/lib/serverConfig";
 import { generationTracker } from "../electron/lib/generation";
 import { normalizeModelPath } from "../electron/lib/modelPaths";
 import { resolveModelRef } from "../electron/lib/models";
 import { getEngine } from "../engines";
 import { chatTemplateSupportsReasoning } from "../shared/reasoning";
+import { validateBackendDevices } from "../shared/gpuDevices";
 import type { LoadedModelState, ServerDefinition, ServerInstanceStatus } from "../shared/types";
 import {
   ensureServerRuntime,
   fetchServerLogs,
   getServerStartedAt,
+  inspectServerPid,
   inspectServerStatus,
   restartServerRuntime,
   stopServerRuntime,
 } from "./serverRuntime";
 import { isMetalBackend } from "./hostAgent";
+import { isNativeRuntime } from "../shared/runtimeMode";
+import { claimGpus, releaseGpus } from "./gpuClaims";
+import { getGpuInfoAsync } from "./platformGpu";
 import { clearLoadEnv, llamaConnectHost, writeLoadEnv } from "./containerUtils";
 import { resolveInferenceModel } from "../electron/lib/chatInfer";
 
@@ -163,6 +168,7 @@ export class InstanceRuntime {
   }
 
   getHost(): string {
+    if (isNativeRuntime(this.def)) return "127.0.0.1";
     return llamaConnectHost();
   }
 
@@ -224,7 +230,7 @@ export class InstanceRuntime {
 
   /** Verify server is reachable; reload if backend thinks running but process is gone. */
   async ensureReady(): Promise<void> {
-    await this.syncMetalHealth();
+    await this.syncHostProcessHealth();
     const base = `http://${this.getHost()}:${this.def.hostPort}`;
     if (this.isRunning() && (await probeServerReady(base, this.getApiKey()))) return;
     if (this.loadPromise) {
@@ -236,8 +242,8 @@ export class InstanceRuntime {
     await this.loadInner(true);
   }
 
-  private async syncMetalHealth(): Promise<void> {
-    if (!isMetalBackend(this.def) || !this.state?.running) return;
+  private async syncHostProcessHealth(): Promise<void> {
+    if ((!isMetalBackend(this.def) && !isNativeRuntime(this.def)) || !this.state?.running) return;
     const base = `http://${this.getHost()}:${this.def.hostPort}`;
     if (await probeServerReady(base, this.getApiKey())) return;
     this.state = null;
@@ -257,6 +263,14 @@ export class InstanceRuntime {
     if (!engine.supportsBackend(def.backend)) {
       this.loadStartedAt = null;
       throw new Error(`${engine.label} does not support backend ${def.backend}`);
+    }
+    if (def.backend !== "cpu") {
+      const gpu = await getGpuInfoAsync();
+      const gpuErr = validateBackendDevices(def.backend, gpu.devices, def.gpuDevices);
+      if (gpuErr) {
+        this.loadStartedAt = null;
+        throw new Error(gpuErr);
+      }
     }
 
     if (!def.modelPath && modelRef.source === "local") {
@@ -285,6 +299,8 @@ export class InstanceRuntime {
     for (const line of plan.logLines) this.logs.append(line);
     if (isMetalBackend(def)) {
       this.logs.append(`[revolver] metal host-agent → port ${def.hostPort}`);
+    } else if (isNativeRuntime(def)) {
+      this.logs.append(`[revolver] native llama-server → port ${def.hostPort}`);
     }
     if (def.gpuDevices.length) {
       this.logs.append(`[revolver] GPUs=${def.gpuDevices.join(",")} mode=${def.gpuMode}`);
@@ -294,8 +310,10 @@ export class InstanceRuntime {
     writeLoadEnv(spec.envFileName, plan.env);
 
     try {
+      claimGpus(def, { force: _force });
       await restartServerRuntime(def);
     } catch (e) {
+      releaseGpus(def.id);
       this.loadStartedAt = null;
       throw e;
     }
@@ -311,6 +329,8 @@ export class InstanceRuntime {
         () => fetchServerLogs(def, { since }),
       );
     } catch (e) {
+      releaseGpus(def.id);
+      await stopServerRuntime(def).catch(() => {});
       this.loadStartedAt = null;
       this.lastLoadError = e instanceof Error ? e.message : String(e);
       throw e;
@@ -322,7 +342,7 @@ export class InstanceRuntime {
     await this.refreshServerProps(base);
     await this.refreshServerLogs();
 
-    this.state = this.buildState();
+    this.state = await this.buildState();
     this.loadStartedAt = null;
     this.lastLoadError = null;
     return this.state;
@@ -340,8 +360,9 @@ export class InstanceRuntime {
     }
   }
 
-  private buildState(startedAt: string = new Date().toISOString()): LoadedModelState {
+  private async buildState(startedAt: string = new Date().toISOString()): Promise<LoadedModelState> {
     const def = this.def;
+    const pid = await inspectServerPid(def);
     return {
       modelId: def.modelId,
       modelPath: def.modelPath,
@@ -350,7 +371,7 @@ export class InstanceRuntime {
       nGpuLayers: def.nGpuLayers,
       port: def.hostPort,
       host: this.getHost(),
-      pid: null,
+      pid,
       startedAt,
       mmprojPath: def.mmprojPath,
       running: true,
@@ -367,12 +388,14 @@ export class InstanceRuntime {
   async adopt(): Promise<void> {
     if (!this.def.modelPath || this.state?.running) return;
 
-    if (isMetalBackend(this.def)) {
+    const hostProcess = isMetalBackend(this.def) || isNativeRuntime(this.def);
+    if (hostProcess) {
       const base = `http://${this.getHost()}:${this.def.hostPort}`;
       try {
         if (await probeServerReady(base, this.getApiKey())) {
           const startedAt = (await getServerStartedAt(this.def)) ?? undefined;
-          this.state = this.buildState(startedAt);
+          this.state = await this.buildState(startedAt);
+          claimGpus(this.def, { force: true });
           await this.refreshInferenceModel();
           await this.refreshServerProps(base);
           this.logs.append(`[revolver] adopted running server "${this.def.name}" on ${base}`);
@@ -395,7 +418,8 @@ export class InstanceRuntime {
     try {
       if (await probeServerReady(base, this.getApiKey())) {
         const startedAt = (await getServerStartedAt(this.def)) ?? undefined;
-        this.state = this.buildState(startedAt);
+        this.state = await this.buildState(startedAt);
+        claimGpus(this.def, { force: true });
         await this.refreshInferenceModel();
         await this.refreshServerProps(base);
         this.logs.append(`[revolver] adopted running server "${this.def.name}" on ${base}`);
@@ -415,15 +439,17 @@ export class InstanceRuntime {
     this.inferenceModel = null;
     this.supportsReasoning = null;
     this.nCtx = null;
+    generationTracker.clear();
     this.logs.append(`[revolver] stopping server "${this.def.name}"`);
     await stopServerRuntime(this.def);
+    releaseGpus(this.def.id);
   }
 
   async refreshServerLogs(): Promise<void> {
     const tail = loadServerConfig().logLinesLimit;
     const since = await getServerStartedAt(this.def);
     this.serverLogLines = await fetchServerLogs(this.def, { tail, since });
-    await this.syncMetalHealth();
+    await this.syncHostProcessHealth();
     // Retry /props once if we never got a reasoning signal (e.g. race at load).
     if (this.isRunning() && this.supportsReasoning == null) {
       await this.refreshServerProps();
@@ -482,7 +508,8 @@ export class InstanceRuntime {
       port,
       host,
       baseUrl: base,
-      endpoints: serverEndpoints({ ...cfg, host, port }),
+      gatewayUrl: serverBaseUrl(),
+      endpoints: serverEndpoints(),
       logs: lines,
       logsFiltered: filterLogLines(lines, !cfg.verbose),
       containerLogs,

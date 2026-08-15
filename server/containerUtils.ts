@@ -1,11 +1,12 @@
 import { execFile } from "child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { promisify } from "util";
-import { loadConfig } from "../electron/lib/config";
-import { getRevolverRoot } from "../electron/lib/appRoot";
+import { getDataDir, loadConfig } from "../electron/lib/config";
+import { getGpuInfo } from "../electron/lib/gpu";
 import type { EngineContainerSpec } from "../engines/types";
-import type { ServerDefinition } from "../shared/types";
+import { vulkanDriverEnv } from "../shared/gpuDevices";
+import type { GpuDevice, ServerDefinition } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,12 +26,28 @@ export async function docker(
   return stdout;
 }
 
+export async function dockerHealth(): Promise<{ available: boolean; error?: string }> {
+  try {
+    await docker(["info", "--format", "{{.ServerVersion}}"], { timeoutMs: 15_000 });
+    return { available: true };
+  } catch (e) {
+    const err = e as { stderr?: string; message?: string };
+    const detail = String(err.stderr || err.message || e).trim();
+    const short = detail.split("\n").filter(Boolean).pop() || "Docker daemon not reachable";
+    return { available: false, error: short };
+  }
+}
+
+export async function dockerAvailable(): Promise<boolean> {
+  return (await dockerHealth()).available;
+}
+
 export function containerName(serverId: string): string {
   return `revolver-server-${serverId}`;
 }
 
 function configDir(): string {
-  return process.env.LLAMA_CONFIG_DIR ?? join(getRevolverRoot(), "data", "llama-config");
+  return process.env.LLAMA_CONFIG_DIR ?? join(getDataDir(), "llama-config");
 }
 
 function decodeMountinfoField(field: string): string {
@@ -118,41 +135,156 @@ export function relativeVisibleDevices(def: ServerDefinition): string {
   return def.gpuDevices.map((_, i) => i).join(",");
 }
 
-/** GPU device assignment per accelerator backend — independent of the inference engine. */
-function gpuRunArgs(def: ServerDefinition): string[] {
-  if (def.backend === "cpu") return [];
-  if (def.gpuDevices.length === 0) {
-    if (def.backend === "cuda" && process.env.LLAMA_GPU === "1") {
-      return ["--gpus", "all"];
+function hostGroupGid(name: string): string | null {
+  for (const path of ["/etc/group", "/host/etc/group"]) {
+    try {
+      const line = readFileSync(path, "utf8")
+        .split("\n")
+        .find((l) => l.startsWith(`${name}:`));
+      const gid = line?.split(":")[2];
+      if (gid) return gid;
+    } catch {
+      /* missing */
     }
-    return [];
   }
-  const hostDevices = def.gpuDevices.join(",");
-  const relative = relativeVisibleDevices(def);
+  return null;
+}
+
+/** GIDs that can open host DRM nodes. Names resolved from host or backend /etc/group. */
+function driGroupArgs(): string[] {
+  const gids = new Set<string>();
+  for (const name of ["video", "render"]) {
+    const gid = hostGroupGid(name);
+    if (gid) gids.add(gid);
+  }
+  const addStat = (path: string) => {
+    try {
+      const gid = statSync(path).gid;
+      if (gid > 0) gids.add(String(gid));
+    } catch {
+      /* backend container has no /dev/dri — host daemon still gets the bind mount */
+    }
+  };
+  addStat("/dev/kfd");
+  if (existsSync("/dev/dri")) {
+    try {
+      for (const name of readdirSync("/dev/dri")) addStat(join("/dev/dri", name));
+    } catch {
+      /* ignore */
+    }
+  }
+  const args: string[] = [];
+  for (const gid of gids) args.push("--group-add", gid);
+  return args;
+}
+
+function rocmDockerArgs(hostDevices?: string): string[] {
+  // Paths are host-daemon paths (docker.sock). Do not gate on existsSync inside
+  // the compose backend — that filesystem has no /dev/dri.
+  const args = [
+    "-v",
+    "/dev/dri:/dev/dri",
+    "--device",
+    "/dev/kfd",
+    "--security-opt",
+    "seccomp=unconfined",
+    ...driGroupArgs(),
+  ];
+  if (hostDevices) {
+    args.push("-e", `HIP_VISIBLE_DEVICES=${hostDevices}`, "-e", `ROCR_VISIBLE_DEVICES=${hostDevices}`);
+  }
+  return args;
+}
+
+/** Host DRM nodes (renderD* / card*). Compose backend has no /dev/dri; sysfs still lists them. */
+function hostDriDeviceArgs(): string[] {
+  const names = new Set<string>();
+  const addFrom = (dir: string) => {
+    try {
+      for (const n of readdirSync(dir)) {
+        if (/^(renderD|card)\d+$/.test(n)) names.add(n);
+      }
+    } catch {
+      /* missing */
+    }
+  };
+  addFrom("/dev/dri");
+  const sys = (process.env.REVOLVER_SYSFS ?? "/sys").replace(/\/+$/, "");
+  addFrom(join(sys, "class/drm"));
+  const args: string[] = [];
+  for (const n of [...names].sort()) {
+    args.push("--device", `/dev/dri/${n}`);
+  }
+  return args;
+}
+
+/** DRM major 226 — a `/dev/dri` bind-mount is not in the default device cgroup. */
+const DRM_CGROUP_RULE = "c 226:* rmw";
+
+function vulkanDockerArgs(hostDevices?: string): string[] {
+  const args = [
+    ...hostDriDeviceArgs(),
+    "-v",
+    "/dev/dri:/dev/dri",
+    "--device-cgroup-rule",
+    DRM_CGROUP_RULE,
+    "--security-opt",
+    "seccomp=unconfined",
+    ...driGroupArgs(),
+  ];
+  const indices = (hostDevices ?? "")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
+  let devices: GpuDevice[] = [];
+  try {
+    devices = getGpuInfo().devices;
+  } catch {
+    devices = [];
+  }
+  for (const [key, value] of Object.entries(vulkanDriverEnv(devices, indices))) {
+    args.push("-e", `${key}=${value}`);
+  }
+  return args;
+}
+
+/** Bump when GPU docker flags change so existing containers are recreated. */
+export function gpuPassthroughSpec(def: ServerDefinition): string {
+  switch (def.backend) {
+    case "vulkan":
+      return "vulkan-dri-device-v1";
+    case "rocm":
+      return "rocm-kfd-v1";
+    case "cuda":
+      return `cuda-${def.gpuDevices.join(",") || "all"}`;
+    default:
+      return "none";
+  }
+}
+
+/** GPU device assignment per accelerator backend — independent of the inference engine. */
+export function gpuRunArgs(def: ServerDefinition): string[] {
+  if (def.backend === "cpu" || def.backend === "metal") return [];
+  const hostDevices = def.gpuDevices.length ? def.gpuDevices.join(",") : undefined;
+  const relative = def.gpuDevices.length ? relativeVisibleDevices(def) : undefined;
   switch (def.backend) {
     case "cuda":
+      if (!hostDevices) {
+        return process.env.LLAMA_GPU === "1" ? ["--gpus", "all"] : [];
+      }
       // Quote the device list: Docker parses `--gpus` as CSV, so an unquoted
       // `device=0,1` is split into `device=0` + a bare `1` (read as Count),
       // triggering "cannot set both Count and DeviceIDs". The embedded quotes
       // keep `0,1` as a single field.
       return ["--gpus", `"device=${hostDevices}"`, "-e", `CUDA_VISIBLE_DEVICES=${relative}`];
     case "rocm":
-      return [
-        "--device",
-        "/dev/kfd",
-        "--device",
-        "/dev/dri",
-        "--security-opt",
-        "seccomp=unconfined",
-        "--group-add",
-        "video",
-        "-e",
-        `HIP_VISIBLE_DEVICES=${relative}`,
-        "-e",
-        `ROCR_VISIBLE_DEVICES=${relative}`,
-      ];
+      // ROCm sees every AMD GPU; HIP_VISIBLE_DEVICES must be the host HIP index,
+      // not a 0..n-1 remap (there is no `--gpus` isolation).
+      return rocmDockerArgs(hostDevices);
     case "vulkan":
-      return ["--device", "/dev/dri"];
+      // Mesa image ICD list ≠ host vulkaninfo. vulkanDriverEnv remaps
+      // GGML_VK_VISIBLE_DEVICES after pinning RADV/ANV.
+      return vulkanDockerArgs(hostDevices);
     default:
       return [];
   }
@@ -177,9 +309,18 @@ export async function ensureServerContainer(
 
   const name = containerName(def.id);
   try {
-    const status = (await docker(["inspect", "-f", "{{.State.Status}}", name])).trim();
-    if (status === "running") return;
-    if (status === "exited" || status === "created") {
+    const info = JSON.parse(await docker(["inspect", name]))[0] as {
+      State?: { Status?: string };
+      Config?: { Labels?: Record<string, string> };
+    };
+    const status = (info?.State?.Status ?? "").trim();
+    const labels = info?.Config?.Labels ?? {};
+    const stale = labels["revolver.gpu-passthrough"] !== gpuPassthroughSpec(def);
+    if (stale) {
+      await docker(["rm", "-f", name]);
+    } else if (status === "running") {
+      return;
+    } else if (status === "exited" || status === "created") {
       await docker(["start", name]);
       return;
     }
@@ -207,6 +348,8 @@ export async function ensureServerContainer(
     `revolver.engine=${def.engine ?? "llamacpp"}`,
     "--label",
     `revolver.model=${def.modelId}`,
+    "--label",
+    `revolver.gpu-passthrough=${gpuPassthroughSpec(def)}`,
     "--entrypoint",
     `/config/${spec.entrypoint.fileName}`,
     "-p",

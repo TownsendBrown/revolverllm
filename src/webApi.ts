@@ -200,5 +200,25 @@ export function createWebApi(base = "/api"): RevolverApi {
       });
     },
     openPath: (path) => post(p("/open-path"), { path }),
+    focusWindow: async () => {},
+    listBenchmarkDefinitions: () => get(p("/benchmarks/definitions")),
+    listBenchmarkRuns: () => get(p("/benchmarks/runs")),
+    getBenchmarkRun: (id) => get(p(`/benchmarks/runs/${encodeURIComponent(id)}`)),
+    startBenchmarkRun: (req) => post(p("/benchmarks/runs"), req),
+    cancelBenchmarkRun: (id) => post(p(`/benchmarks/runs/${encodeURIComponent(id)}/cancel`)),
+    deleteBenchmarkRun: (id) => del(p(`/benchmarks/runs/${encodeURIComponent(id)}`)),
+    setBenchmarkHumanScore: (runId, testId, humanScore, humanMaxScore, humanNotes) =>
+      post(p(`/benchmarks/runs/${encodeURIComponent(runId)}/tests/${encodeURIComponent(testId)}/human-score`), {
+        humanScore,
+        humanMaxScore,
+        humanNotes,
+      }),
+    readBenchmarkArtifact: async (runId, testId, filename) => {
+      const res = await fetch(
+        p(`/benchmarks/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(testId)}/${encodeURIComponent(filename)}`),
+      );
+      if (!res.ok) throw new Error(await res.text());
+      return res.text();
+    },
   };
 }

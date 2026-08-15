@@ -1,13 +1,10 @@
 import { readHfConfig } from "../../electron/lib/hfModels";
 import { normalizeModelPath, toContainerModelPath } from "../../electron/lib/modelPaths";
+import { cudaVisibleDevices } from "../../shared/runtimeMode";
 import type { ServerDefinition } from "../../shared/types";
 import type { LoadEnvPlan } from "../types";
 import { resolveVllmTokenizerMode } from "../vllm/ggufTokenizer";
 import { VLLM_LEGACY_CONTAINER_PORT } from "./docker";
-
-function relativeVisibleDevices(def: ServerDefinition): string {
-  return def.gpuDevices.map((_, i) => i).join(",");
-}
 
 function tensorParallelSize(def: ServerDefinition): number {
   if (def.gpuMode === "single" && def.gpuDevices.length > 1) return 1;
@@ -101,7 +98,8 @@ export function buildVllmLegacyLoadEnv(def: ServerDefinition): LoadEnvPlan {
       GPU_MEMORY_UTILIZATION: gpuMem,
       DTYPE: dtype,
       ENFORCE_EAGER: enforceEager,
-      CUDA_VISIBLE_DEVICES: def.gpuDevices.length ? relativeVisibleDevices(def) : undefined,
+      API_KEY: def.apiKey ?? undefined,
+      CUDA_VISIBLE_DEVICES: cudaVisibleDevices(def),
     },
     logLines: [
       `[revolver] engine=vllm-legacy model=${def.modelId} format=${fmt || "safetensors"} ctx=${def.contextLength} tensor_parallel=${tp} dtype=${dtype} tokenizer_mode=${tokenizerMode ?? "auto"} enforce_eager=${enforceEager ?? "off"}`,

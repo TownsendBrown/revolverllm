@@ -26,6 +26,12 @@ function getAppleGpuInfo(): GpuInfo {
       {
         index: 0,
         name: label,
+        vendor: "apple",
+        recommendedBackend: "metal",
+        arch: null,
+        nvidiaIndex: null,
+        amdIndex: null,
+        vulkanIndex: null,
         totalBytes: total,
         usedBytes: used,
         freeBytes: free,
