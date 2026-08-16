@@ -348,4 +348,4 @@ docker compose down
 
 ## License
 
-Private — see repository owner for terms.
+[MIT](LICENSE)
