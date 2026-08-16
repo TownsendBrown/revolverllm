@@ -29,6 +29,15 @@ function authHeaders(apiKey: string | null): Record<string, string> {
   return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }
 
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type ServerPropsProbe = {
   supportsReasoning: boolean | null;
   nCtx: number | null;
@@ -43,6 +52,7 @@ async function probeServerProps(
       signal: AbortSignal.timeout(3000),
       headers: authHeaders(apiKey),
     });
+    if (res.status === 404) return { supportsReasoning: false, nCtx: null };
     if (!res.ok) return { supportsReasoning: null, nCtx: null };
     const body = (await res.json()) as {
       chat_template?: string;
@@ -242,10 +252,11 @@ export class InstanceRuntime {
     await this.loadInner(true);
   }
 
+  /** Host-process liveness via PID. HTTP /health is only for load + chat (ensureReady). */
   private async syncHostProcessHealth(): Promise<void> {
     if ((!isMetalBackend(this.def) && !isNativeRuntime(this.def)) || !this.state?.running) return;
-    const base = `http://${this.getHost()}:${this.def.hostPort}`;
-    if (await probeServerReady(base, this.getApiKey())) return;
+    const pid = await inspectServerPid(this.def);
+    if (pid != null && processAlive(pid)) return;
     this.state = null;
     this.lastLoadError = "inference server unreachable — reload required";
     this.logs.append("[revolver] inference server unreachable — marked idle");
@@ -300,7 +311,8 @@ export class InstanceRuntime {
     if (isMetalBackend(def)) {
       this.logs.append(`[revolver] metal host-agent → port ${def.hostPort}`);
     } else if (isNativeRuntime(def)) {
-      this.logs.append(`[revolver] native llama-server → port ${def.hostPort}`);
+      const kind = def.engine === "mlx" ? "native mlx_lm.server" : "native llama-server";
+      this.logs.append(`[revolver] ${kind} → port ${def.hostPort}`);
     }
     if (def.gpuDevices.length) {
       this.logs.append(`[revolver] GPUs=${def.gpuDevices.join(",")} mode=${def.gpuMode}`);
@@ -349,6 +361,13 @@ export class InstanceRuntime {
   }
 
   private async refreshServerProps(base?: string): Promise<void> {
+    if ((this.def.engine ?? "llamacpp") !== "llamacpp") {
+      if (this.supportsReasoning != null) return;
+      this.supportsReasoning = false;
+      this.nCtx = this.def.contextLength;
+      this.logs.append("[revolver] reasoning=not detected (engine has no /props)");
+      return;
+    }
     const url = base ?? `http://${this.getHost()}:${this.def.hostPort}`;
     const props = await probeServerProps(url, this.getApiKey());
     this.supportsReasoning = props.supportsReasoning;
@@ -439,7 +458,7 @@ export class InstanceRuntime {
     this.inferenceModel = null;
     this.supportsReasoning = null;
     this.nCtx = null;
-    generationTracker.clear();
+    generationTracker.clear(this.def.id);
     this.logs.append(`[revolver] stopping server "${this.def.name}"`);
     await stopServerRuntime(this.def);
     releaseGpus(this.def.id);
@@ -482,7 +501,7 @@ export class InstanceRuntime {
     const port = this.def.hostPort;
     const base = `http://${host}:${port}`;
 
-    const generation = generationTracker.current;
+    const generation = generationTracker.current(this.def.id);
     let loadPhase: ServerInstanceStatus["loadPhase"];
     if (this.loadStartedAt != null) {
       loadPhase = "loading";

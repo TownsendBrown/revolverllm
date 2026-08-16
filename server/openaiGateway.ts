@@ -40,6 +40,11 @@ function gatewayDisabled(_req: Request, res: Response): boolean {
 }
 
 async function proxyPost(req: Request, res: Response, path: string): Promise<void> {
+  const clientAbort = new AbortController();
+  const onClose = () => clientAbort.abort();
+  req.on("close", onClose);
+  req.on("aborted", onClose);
+
   try {
     const body = req.body as Record<string, unknown> | undefined;
     const model = typeof body?.model === "string" ? body.model : undefined;
@@ -54,7 +59,7 @@ async function proxyPost(req: Request, res: Response, path: string): Promise<voi
       method: "POST",
       headers,
       body: JSON.stringify(upstreamBody),
-      signal: req.socket.destroyed ? AbortSignal.abort() : undefined,
+      signal: clientAbort.signal,
     });
 
     res.status(upstream.status);
@@ -66,12 +71,21 @@ async function proxyPost(req: Request, res: Response, path: string): Promise<voi
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
       res.setHeader("X-Accel-Buffering", "no");
-      Readable.fromWeb(upstream.body as import("stream/web").ReadableStream).pipe(res);
+      const nodeStream = Readable.fromWeb(upstream.body as import("stream/web").ReadableStream);
+      nodeStream.on("error", () => {
+        if (!res.writableEnded) res.end();
+      });
+      nodeStream.pipe(res);
+      res.on("close", () => {
+        nodeStream.destroy();
+        clientAbort.abort();
+      });
       return;
     }
 
     res.send(await upstream.text());
   } catch (e) {
+    if (clientAbort.signal.aborted) return;
     if (e instanceof GatewayRoutingError) {
       res.status(e.status).json({
         error: { message: e.message, type: "gateway_error" },
@@ -82,6 +96,9 @@ async function proxyPost(req: Request, res: Response, path: string): Promise<voi
     res.status(502).json({
       error: { message, type: "gateway_error" },
     });
+  } finally {
+    req.off("close", onClose);
+    req.off("aborted", onClose);
   }
 }
 

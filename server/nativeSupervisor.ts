@@ -1,15 +1,17 @@
 import { spawn, execFile, type ChildProcess } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { promisify } from "util";
 import { getDataDir } from "../electron/lib/config";
 import { resolveLlamaServerBin } from "./llamaServerBin";
+import { probeMlxRuntime } from "./mlxServerBin";
 import { mergeLibPath } from "./nativeBackends";
 import {
   LLAMA_ENTRYPOINT_FILE,
   LLAMA_ENTRYPOINT_SCRIPT,
   llamaEnvFileName,
 } from "../engines/llamacpp/docker";
+import { mlxEnvFileName } from "../engines/mlx/docker";
 
 const execFileAsync = promisify(execFile);
 
@@ -149,54 +151,95 @@ export class NativeSupervisor {
     rec.status = "starting";
     rec.startedAt = new Date().toISOString();
 
-    const envPath = join(this.opts.configDir, llamaEnvFileName(serverId));
-    const fileEnv = parseEnvFile(envPath);
-    const model = fileEnv.MODEL_PATH ?? "";
+    const mlxEnvPath = join(this.opts.configDir, mlxEnvFileName(serverId));
+    const llamaEnvPath = join(this.opts.configDir, llamaEnvFileName(serverId));
+    const isMlx = existsSync(mlxEnvPath);
+    const fileEnv = parseEnvFile(isMlx ? mlxEnvPath : llamaEnvPath);
+    const model = fileEnv.MODEL ?? fileEnv.MODEL_PATH ?? "";
     if (!model) {
       rec.status = "idle";
-      appendLog(rec, "llama-server: no model configured — idle (load via manager)");
+      appendLog(
+        rec,
+        `${isMlx ? "mlx_lm.server" : "llama-server"}: no model configured — idle (load via manager)`,
+      );
       return this.toInspect(rec);
     }
-    if (!existsSync(model)) {
+    const modelOnDisk = existsSync(model);
+    const hfRepo = !model.startsWith("/") && model.includes("/");
+    if (!modelOnDisk && !(isMlx && hfRepo)) {
       rec.status = "crashed";
-      appendLog(rec, `llama-server: model file not found: ${model}`);
+      appendLog(rec, `${isMlx ? "mlx_lm.server" : "llama-server"}: model not found: ${model}`);
       return this.toInspect(rec);
     }
 
-    const resolved = resolveLlamaServerBin(this.opts.llamaServerBin);
-    if (!resolved.bin) {
-      rec.status = "crashed";
-      appendLog(rec, `[native] ${resolved.error}`);
-      return this.toInspect(rec);
+    let child: ChildProcess;
+    if (isMlx) {
+      const mlx = probeMlxRuntime();
+      if (!mlx.python) {
+        rec.status = "crashed";
+        appendLog(rec, `[native] ${mlx.error}`);
+        return this.toInspect(rec);
+      }
+      const args = [
+        "-W",
+        "ignore::UserWarning",
+        "-m",
+        "mlx_lm.server",
+        "--model",
+        model,
+        "--host",
+        fileEnv.MLX_HOST || "127.0.0.1",
+        "--port",
+        String(hostPort),
+      ];
+      if (fileEnv.ADAPTER_PATH) args.push("--adapter-path", fileEnv.ADAPTER_PATH);
+      appendLog(rec, `[native] mlx_lm.server ${mlx.python} --model ${model} --port ${hostPort}`);
+      child = spawn(mlx.python, args, {
+        env: {
+          ...process.env,
+          ...fileEnv,
+          ...this.opts.extraEnv,
+        },
+        // Avoid repo-root `mlx/` shadowing the pip mlx package on sys.path.
+        cwd: dirname(mlx.python),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } else {
+      const resolved = resolveLlamaServerBin(this.opts.llamaServerBin);
+      if (!resolved.bin) {
+        rec.status = "crashed";
+        appendLog(rec, `[native] ${resolved.error}`);
+        return this.toInspect(rec);
+      }
+      if (resolved.packId) {
+        appendLog(rec, `[native] backend pack ${resolved.packId} → ${resolved.bin}`);
+      }
+
+      const entrypoint = join(this.opts.configDir, LLAMA_ENTRYPOINT_FILE);
+      writeFileSync(entrypoint, LLAMA_ENTRYPOINT_SCRIPT);
+
+      const env: NodeJS.ProcessEnv = mergeLibPath(
+        {
+          ...process.env,
+          ...fileEnv,
+          ...this.opts.extraEnv,
+          LLAMA_CONFIG_DIR: this.opts.configDir,
+          LLAMA_ENV_FILE: llamaEnvFileName(serverId),
+          LLAMA_HOST: "0.0.0.0",
+          LLAMA_PORT: String(hostPort),
+          LLAMA_SERVER_BIN: resolved.bin,
+          LLAMA_NATIVE: "1",
+          BACKEND: fileEnv.BACKEND ?? process.env.BACKEND ?? "cpu",
+        },
+        resolved.libDir,
+      );
+
+      child = spawn("/bin/sh", [entrypoint], {
+        env,
+        cwd: this.opts.configDir,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     }
-    if (resolved.packId) {
-      appendLog(rec, `[native] backend pack ${resolved.packId} → ${resolved.bin}`);
-    }
-
-    const entrypoint = join(this.opts.configDir, LLAMA_ENTRYPOINT_FILE);
-    writeFileSync(entrypoint, LLAMA_ENTRYPOINT_SCRIPT);
-
-    const env: NodeJS.ProcessEnv = mergeLibPath(
-      {
-        ...process.env,
-        ...fileEnv,
-        ...this.opts.extraEnv,
-        LLAMA_CONFIG_DIR: this.opts.configDir,
-        LLAMA_ENV_FILE: llamaEnvFileName(serverId),
-        LLAMA_HOST: "0.0.0.0",
-        LLAMA_PORT: String(hostPort),
-        LLAMA_SERVER_BIN: resolved.bin,
-        LLAMA_NATIVE: "1",
-        BACKEND: fileEnv.BACKEND ?? process.env.BACKEND ?? "cpu",
-      },
-      resolved.libDir,
-    );
-
-    const child = spawn("/bin/sh", [entrypoint], {
-      env,
-      cwd: this.opts.configDir,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
 
     rec.proc = child;
     rec.pid = child.pid ?? null;
@@ -213,7 +256,7 @@ export class NativeSupervisor {
           rec.status = "crashed";
           appendLog(
             rec,
-            `[native] llama-server exited code=${code ?? "?"} signal=${signal ?? ""}`,
+            `[native] ${isMlx ? "mlx_lm.server" : "llama-server"} exited code=${code ?? "?"} signal=${signal ?? ""}`,
           );
         }
       }

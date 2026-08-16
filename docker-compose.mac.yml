@@ -12,6 +12,9 @@ services:
     environment:
       REVOLVER_LLAMA_HOST: host.docker.internal
       REVOLVER_LLAMA_PORT: "9742"
+      # Reuse Metal host agent for openPath (docker-up-mac does not start :9743 open agent).
+      REVOLVER_HOST_AGENT_HOST: host.docker.internal
+      REVOLVER_HOST_AGENT_PORT: "9742"
       LLAMA_CONFIG_HOST_DIR: ${REVOLVER_LLAMA_CONFIG_HOST:-./data/llama-config}
     extra_hosts:
       - "host.docker.internal:host-gateway"

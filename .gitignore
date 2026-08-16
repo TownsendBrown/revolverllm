@@ -14,3 +14,4 @@ models/
 backends/src/
 backends/dist/
 backends/build/
+/mlx/

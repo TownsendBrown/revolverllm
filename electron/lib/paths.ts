@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { dirname, join } from "path";
 import { getRevolverRoot } from "./appRoot";
 import {
   getDataDir,
@@ -8,6 +8,8 @@ import {
   type RevolverConfig,
 } from "./config";
 import type { LocalPaths, LocalSettings } from "./types";
+
+export const SETTINGS_SCHEMA_VERSION = 1;
 
 export { getRevolverRoot, getDataDir, loadConfig, saveConfig };
 export type { RevolverConfig };
@@ -43,6 +45,7 @@ export function readLocalSettings(): LocalSettings {
   try {
     const raw = JSON.parse(readFileSync(paths.settings, "utf8"));
     return {
+      schemaVersion: typeof raw.schemaVersion === "number" ? raw.schemaVersion : 1,
       downloadsFolder: raw.downloadsFolder ?? defaults.downloadsFolder,
       defaultContextLength: raw.defaultContextLength ?? defaults.defaultContextLength,
       enableLocalService: raw.enableLocalService ?? true,
@@ -51,6 +54,23 @@ export function readLocalSettings(): LocalSettings {
   } catch {
     return defaults;
   }
+}
+
+export function saveLocalSettings(patch: Partial<LocalSettings>): LocalSettings {
+  const current = readLocalSettings();
+  const next: LocalSettings = {
+    ...current,
+    ...patch,
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
+    modelLoadingGuardrails: {
+      ...current.modelLoadingGuardrails,
+      ...(patch.modelLoadingGuardrails ?? {}),
+    },
+  };
+  const paths = getLocalPaths();
+  mkdirSync(dirname(paths.settings), { recursive: true });
+  writeFileSync(paths.settings, `${JSON.stringify(next, null, 2)}\n`);
+  return next;
 }
 
 export function getDownloadsDir(): string {

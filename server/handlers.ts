@@ -4,6 +4,7 @@ import {
   getCatalog,
   resolveModelPath,
   resolveModelRef,
+  deleteLocalModel as deleteLocalModelFromDisk,
 } from "../electron/lib/models";
 import { getLocalPaths, loadConfig, readLocalSettings, saveConfig } from "../electron/lib/paths";
 import { resolveRepoHostPath } from "../shared/openPath";
@@ -21,10 +22,23 @@ import { serverManager } from "./serverManager";
 import { hostPathsForDocker, runtimeHostOs } from "../shared/openPath";
 import { restartOpenAiGateway } from "./openaiGateway";
 import * as benchmarkRunner from "./benchmarkRunner";
-import { defaultRuntimeMode } from "../shared/runtimeMode";
+import { defaultRuntimeMode, inComposeBackend } from "../shared/runtimeMode";
 import { dockerHealth } from "./containerUtils";
 import { probeNativeRuntime } from "./llamaServerBin";
+import { probeMlxRuntime } from "./mlxServerBin";
 import type { BenchmarkCategory } from "../shared/benchmarks/types";
+import { loadSettings, saveSettings, jitStatusFromConfig } from "../electron/lib/settings";
+import { bootstrapHfToken, clearHfToken, isHfTokenSet, setHfToken } from "../electron/lib/secrets";
+import { hasApiKeyConfigured } from "./apiAuth";
+import { searchModels, listRepoFiles } from "./hfHub";
+import {
+  cancelDownloadJob,
+  getDownloadJob,
+  listDownloadJobs,
+  startDownload,
+} from "./downloadJobs";
+import { assertArtifactRelPath } from "./benchmarkStore";
+import type { SettingsPatch, StartModelDownloadRequest, HubFormatFilter } from "../shared/types";
 
 type GpuDevices = GpuInfo["devices"];
 
@@ -57,6 +71,17 @@ function loadedModelIds(): string[] {
     .listStatuses()
     .filter((s) => s.running && s.loaded?.modelId)
     .map((s) => s.loaded!.modelId);
+}
+
+function loadedModelHints(): string[] {
+  const hints = new Set<string>();
+  for (const s of serverManager.listStatuses()) {
+    if (!s.running || !s.loaded) continue;
+    hints.add(s.loaded.modelId);
+    hints.add(s.loaded.modelPath);
+    if (s.loaded.mmprojPath) hints.add(s.loaded.mmprojPath);
+  }
+  return [...hints];
 }
 
 export async function computeEstimate(opts: {
@@ -203,12 +228,45 @@ export const handlers = {
       localRoot: patch.localRoot ?? current.localRoot,
     });
   },
+  getSettings: () =>
+    loadSettings({ hfTokenSet: isHfTokenSet(), hasApiKey: hasApiKeyConfigured() }),
+  setSettings: async (patch: SettingsPatch) => {
+    const next = saveSettings(patch);
+    if (patch.gateway) await restartOpenAiGateway();
+    return loadSettings({ hfTokenSet: isHfTokenSet(), hasApiKey: hasApiKeyConfigured() });
+  },
+  setHfToken: (token: string) => {
+    setHfToken(token);
+    return { hfTokenSet: isHfTokenSet() };
+  },
+  clearHfToken: () => {
+    clearHfToken();
+    return { hfTokenSet: false };
+  },
+  searchHubModels: async (
+    query: string,
+    filter?: HubFormatFilter,
+    sort?: string,
+  ) => searchModels({ query, filter: filter ?? "all", sort }),
+  listHubRepoFiles: (repoId: string, revision?: string) => listRepoFiles(repoId, revision ?? "main"),
+  startModelDownload: (req: StartModelDownloadRequest) => startDownload(req),
+  listDownloads: () => listDownloadJobs(),
+  getDownload: (jobId: string) => {
+    const job = getDownloadJob(jobId);
+    if (!job) throw new Error("Download job not found");
+    return job;
+  },
+  cancelDownload: (jobId: string) => cancelDownloadJob(jobId),
   getGpu: () => getGpuInfoAsync(),
   getPlatform: async () => {
     const metal = metalEnabled();
     const docker = await dockerHealth();
     const native = probeNativeRuntime();
+    const mlx = probeMlxRuntime();
+    const compose = inComposeBackend();
     return {
+      host: compose ? ("compose" as const) : ("electron" as const),
+      pathSettingsLocked: compose,
       macMetal: metal,
       dockerGpu: process.env.LLAMA_GPU === "1",
       docker: docker.available,
@@ -217,6 +275,9 @@ export const handlers = {
       nativeError: native.error,
       llamaServerBin: native.bin,
       nativeBackendPack: native.packId ?? null,
+      mlx: mlx.available,
+      mlxError: mlx.error,
+      mlxPython: mlx.python,
       defaultRuntime: defaultRuntimeMode(),
       os: runtimeHostOs(),
       canOpenPath: canDispatchOpenPath(),
@@ -225,6 +286,11 @@ export const handlers = {
   },
   getMonitor: () => getMonitorSnapshotAsync(),
   getModels: () => getCatalog(loadedModelIds()),
+  deleteLocalModel: (body: { id?: string }) => {
+    const id = body?.id?.trim();
+    if (!id) throw new Error("Model id required");
+    deleteLocalModelFromDisk(id, loadedModelHints());
+  },
   getEngines: () => engineInfos(),
   listServers: () => serverManager.listStatuses(),
   getServerConfig: () => loadServerConfig(),
@@ -250,7 +316,7 @@ export const handlers = {
       const latest = serverManager.getStatus(serverId)!;
       return {
         ...latest,
-        jit: { enabled: false, autoEvict: false, ttlSeconds: 0 },
+        jit: jitStatusFromConfig(),
         ttlExpiresAt: null,
         servers: serverManager.listStatuses(),
         activeCount: serverManager.overview().activeCount,
@@ -384,18 +450,21 @@ export const handlers = {
     serverId?: string | null,
     onDelta?: (delta: StreamDelta) => void,
     enableThinking?: boolean,
+    signal?: AbortSignal,
   ) => {
-    const { target, meta } = await prepareSendMessage(id, serverId);
+    const { target, meta, effectiveServerId } = await prepareSendMessage(id, serverId);
     return chatService.sendMessage(
       id,
       content,
       (messages, deltaCb) =>
         inferChatStream(messages, {
           ...target,
+          serverId: effectiveServerId ?? target.serverId,
           contextLength: meta.contextLength,
           enableThinking: enableThinking === true,
           modelHints: [meta.modelId, meta.modelPath, meta.modelDisplayName],
           onDelta: deltaCb ?? onDelta ?? (() => {}),
+          signal,
         }),
       meta,
       onDelta,
@@ -424,6 +493,11 @@ export const handlers = {
     humanNotes?: string,
   ) => benchmarkRunner.setHumanScore(runId, testId, humanScore, humanMaxScore, humanNotes),
   getBenchmarkArtifact: (runId: string, relPath: string) => {
+    try {
+      assertArtifactRelPath(relPath);
+    } catch {
+      throw new Error("Artifact not found");
+    }
     const buf = benchmarkRunner.getArtifactContent(runId, relPath);
     if (!buf) throw new Error("Artifact not found");
     return buf;

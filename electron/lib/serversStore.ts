@@ -13,9 +13,12 @@ function storePath(): string {
 }
 
 interface ServersFile {
+  schemaVersion?: number;
   nextPort: number;
   servers: ServerDefinition[];
 }
+
+const SERVERS_SCHEMA_VERSION = 1;
 
 function normalizeDefinition(def: ServerDefinition): ServerDefinition {
   return {
@@ -31,19 +34,22 @@ function normalizeDefinition(def: ServerDefinition): ServerDefinition {
 
 function readFile(): ServersFile {
   const path = storePath();
-  if (!existsSync(path)) return { nextPort: BASE_PORT, servers: [] };
+  if (!existsSync(path)) return { schemaVersion: SERVERS_SCHEMA_VERSION, nextPort: BASE_PORT, servers: [] };
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as ServersFile;
     const servers = raw.servers.map(normalizeDefinition);
-    const migrated = servers.some(
-      (s, i) =>
-        s.modelPath !== raw.servers[i]?.modelPath ||
-        s.mmprojPath !== raw.servers[i]?.mmprojPath ||
-        s.nGpuLayers !== raw.servers[i]?.nGpuLayers ||
-        (s.apiKey ?? null) !== (raw.servers[i]?.apiKey ?? null),
-    );
-    if (migrated) writeFile({ ...raw, servers });
-    return { ...raw, servers };
+    const migrated =
+      raw.schemaVersion !== SERVERS_SCHEMA_VERSION ||
+      servers.some(
+        (s, i) =>
+          s.modelPath !== raw.servers[i]?.modelPath ||
+          s.mmprojPath !== raw.servers[i]?.mmprojPath ||
+          s.nGpuLayers !== raw.servers[i]?.nGpuLayers ||
+          (s.apiKey ?? null) !== (raw.servers[i]?.apiKey ?? null),
+      );
+    const data = { ...raw, schemaVersion: SERVERS_SCHEMA_VERSION, servers };
+    if (migrated) writeFile(data);
+    return data;
   } catch {
     return { nextPort: BASE_PORT, servers: [] };
   }

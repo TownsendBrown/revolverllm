@@ -22,10 +22,13 @@ export function canDispatchOpenPath(): boolean {
 }
 
 async function openViaHostAgent(hostPath: string): Promise<string> {
+  if (metalEnabled()) {
+    return hostAgentCall<string>("openPath", { path: hostPath });
+  }
   if (hostOpenAgentEnabled()) {
     return hostOpenAgentCall<string>("openPath", { path: hostPath });
   }
-  return hostAgentCall<string>("openPath", { path: hostPath });
+  throw new Error("No host agent configured");
 }
 
 export async function dispatchOpenPath(configPath: string): Promise<string> {

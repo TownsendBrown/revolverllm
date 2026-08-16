@@ -1,9 +1,10 @@
 import { existsSync, statSync } from "fs";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { applyElectronDockerEnv } from "./lib/dockerEnv";
 import { applyPackagedRuntimeDefault } from "./lib/nativeLaunch";
+import { bootstrapHfToken, setElectronSecretHooks } from "./lib/secrets";
 import { initElectronConfig, loadConfig } from "./lib/config";
 import { closeChatDb } from "./lib/chatDb";
 import { toIpcError } from "./lib/ipcErrors";
@@ -133,6 +134,14 @@ function bindHandler<T>(channel: string, fn: (arg: T) => unknown) {
 }
 
 async function onReady(): Promise<void> {
+  if (safeStorage.isEncryptionAvailable()) {
+    setElectronSecretHooks({
+      encrypt: (plain) => safeStorage.encryptString(plain).toString("base64"),
+      decrypt: (enc) => safeStorage.decryptString(Buffer.from(enc, "base64")),
+    });
+  }
+  bootstrapHfToken();
+
   if (process.platform === "darwin" && app.dock) {
     const icon = appIconPath();
     if (existsSync(icon)) app.dock.setIcon(icon);
@@ -160,10 +169,40 @@ async function onReady(): Promise<void> {
   bindHandler("revolver:getPaths", () => handlers.getPaths());
   bindHandler("revolver:getConfig", () => handlers.getConfig());
   bindHandler("revolver:setConfig", handlers.setConfig);
+  bindHandler("revolver:getSettings", () => handlers.getSettings());
+  bindHandler("revolver:setSettings", handlers.setSettings);
+  bindHandler("revolver:setHfToken", handlers.setHfToken);
+  bindHandler("revolver:clearHfToken", () => handlers.clearHfToken());
+  ipcMain.handle(
+    "revolver:searchHubModels",
+    withIpcError((_e, query: string, filter?: import("../shared/types").HubFormatFilter, sort?: string) =>
+      handlers.searchHubModels(query, filter, sort),
+    ),
+  );
+  ipcMain.handle(
+    "revolver:listHubRepoFiles",
+    withIpcError((_e, repoId: string, revision?: string) =>
+      handlers.listHubRepoFiles(repoId, revision),
+    ),
+  );
+  bindHandler("revolver:startModelDownload", handlers.startModelDownload);
+  bindHandler("revolver:listDownloads", () => handlers.listDownloads());
+  ipcMain.handle(
+    "revolver:getDownload",
+    withIpcError((_e, jobId: string) => handlers.getDownload(jobId)),
+  );
+  ipcMain.handle(
+    "revolver:cancelDownload",
+    withIpcError((_e, jobId: string) => handlers.cancelDownload(jobId)),
+  );
   bindHandler("revolver:getGpu", () => handlers.getGpu());
   bindHandler("revolver:getPlatform", () => handlers.getPlatform());
   bindHandler("revolver:getMonitor", () => handlers.getMonitor());
   bindHandler("revolver:getModels", () => handlers.getModels());
+  ipcMain.handle(
+    "revolver:deleteLocalModel",
+    withIpcError((_e, id: string) => handlers.deleteLocalModel({ id })),
+  );
   bindHandler("revolver:getEngines", () => handlers.getEngines());
   bindHandler("revolver:getServerConfig", () => handlers.getServerConfig());
   bindHandler("revolver:setServerConfig", handlers.setServerConfig);
@@ -224,6 +263,11 @@ async function onReady(): Promise<void> {
     "revolver:deleteConversation",
     withIpcError((_e, id: string) => handlers.deleteConversation(id)),
   );
+  const streamAbortControllers = new Map<string, AbortController>();
+  ipcMain.on("revolver:cancelStream", (_e, requestId: string) => {
+    streamAbortControllers.get(requestId)?.abort();
+  });
+
   ipcMain.handle(
     "revolver:sendMessage",
     withIpcError(
@@ -238,18 +282,33 @@ async function onReady(): Promise<void> {
           enableThinking?: boolean;
         },
       ) => {
-        if (arg.stream && arg.requestId) {
+        const ac = arg.requestId ? new AbortController() : null;
+        if (ac && arg.requestId) streamAbortControllers.set(arg.requestId, ac);
+        const run = () => {
+          if (arg.stream && arg.requestId) {
+            return handlers.sendMessage(
+              arg.id,
+              arg.content,
+              arg.serverId,
+              (delta) => {
+                event.sender.send("revolver:streamDelta", { requestId: arg.requestId, delta });
+              },
+              arg.enableThinking,
+              ac?.signal,
+            );
+          }
           return handlers.sendMessage(
             arg.id,
             arg.content,
             arg.serverId,
-            (delta) => {
-              event.sender.send("revolver:streamDelta", { requestId: arg.requestId, delta });
-            },
+            undefined,
             arg.enableThinking,
+            ac?.signal,
           );
-        }
-        return handlers.sendMessage(arg.id, arg.content, arg.serverId, undefined, arg.enableThinking);
+        };
+        return run().finally(() => {
+          if (arg.requestId) streamAbortControllers.delete(arg.requestId);
+        });
       },
     ),
   );

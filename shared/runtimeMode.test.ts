@@ -36,10 +36,16 @@ function fakeDef(overrides: Partial<ServerDefinition> = {}): ServerDefinition {
 }
 
 describe("resolveServerRuntime", () => {
-  it("maps metal to metal regardless of runtime field", () => {
+  it("maps metal llama.cpp to metal, MLX metal to native", () => {
     assert.equal(resolveServerRuntime(fakeDef({ backend: "metal", runtime: "docker" })), "metal");
     assert.equal(isNativeRuntime(fakeDef({ backend: "metal" })), false);
     assert.equal(usesHostModelPaths(fakeDef({ backend: "metal" })), true);
+    assert.equal(
+      resolveServerRuntime(fakeDef({ engine: "mlx", backend: "metal", runtime: "docker" })),
+      "native",
+    );
+    assert.equal(isNativeRuntime(fakeDef({ engine: "mlx", backend: "metal" })), true);
+    assert.equal(usesHostModelPaths(fakeDef({ engine: "mlx", backend: "metal" })), true);
   });
 
   it("honors explicit native / docker", () => {

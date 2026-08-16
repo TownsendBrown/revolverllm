@@ -31,6 +31,12 @@ function detectFormat(dir: string, config: Record<string, unknown>): ModelFormat
   if (method.includes("awq") || dir.toLowerCase().includes("awq")) return "awq";
   if (method.includes("gptq") || dir.toLowerCase().includes("gptq")) return "gptq";
 
+  const mlxQuant = config.quantization as Record<string, unknown> | undefined;
+  if (mlxQuant && typeof mlxQuant === "object" && (mlxQuant.bits != null || mlxQuant.group_size != null)) {
+    return "mlx";
+  }
+  if (dir.toLowerCase().includes("mlx") || /[-_]mlx[-_]/i.test(dir)) return "mlx";
+
   const files = readdirSync(dir);
   if (files.some((f) => f.endsWith(".gguf"))) return "gguf";
   if (files.some((f) => f.endsWith(".safetensors"))) return "safetensors";

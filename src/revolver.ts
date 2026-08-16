@@ -42,6 +42,14 @@ export type {
   BenchmarkRun,
   BenchmarkTestResult,
   StartBenchmarkRequest,
+  RevolverSettingsView,
+  SettingsPatch,
+  HubModelSearchResult,
+  HubRepoFile,
+  HubFormatFilter,
+  HubSearchSort,
+  DownloadJob,
+  StartModelDownloadRequest,
 } from "../shared/types";
 
 export const api: RevolverApi =

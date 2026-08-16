@@ -1,5 +1,6 @@
 import type { EngineId, ModelFormat } from "../shared/types";
 import { llamacppEngine } from "./llamacpp/engine";
+import { mlxEngine } from "./mlx/engine";
 import { legacyVllmIncompatReason } from "./vllm-legacy/compat";
 import { vllmLegacyEngine } from "./vllm-legacy/engine";
 import { vllmEngine } from "./vllm/engine";
@@ -9,7 +10,12 @@ const registry = new Map<EngineId, InferenceEngine>([
   [llamacppEngine.id, llamacppEngine],
   [vllmEngine.id, vllmEngine],
   [vllmLegacyEngine.id, vllmLegacyEngine],
+  [mlxEngine.id, mlxEngine],
 ]);
+
+function mlxAllowedOnThisHost(): boolean {
+  return process.platform === "darwin";
+}
 
 export const DEFAULT_ENGINE: EngineId = "llamacpp";
 
@@ -21,6 +27,7 @@ export function registerEngine(engine: InferenceEngine): void {
 export function enginesForFormat(format: ModelFormat): EngineId[] {
   return [...registry.values()]
     .filter((e) => e.capabilities.formats.includes(format))
+    .filter((e) => e.id !== "mlx" || mlxAllowedOnThisHost())
     .map((e) => e.id);
 }
 

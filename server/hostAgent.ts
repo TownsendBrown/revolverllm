@@ -1,8 +1,8 @@
 import { connect, type Socket } from "net";
 import type { ServerDefinition } from "../shared/types";
 
-export function isMetalBackend(def: Pick<ServerDefinition, "backend">): boolean {
-  return def.backend === "metal";
+export function isMetalBackend(def: Pick<ServerDefinition, "backend" | "engine">): boolean {
+  return def.backend === "metal" && def.engine !== "mlx";
 }
 
 function hostAgentEndpoint(): { host: string; port: number; socketPath?: string } {

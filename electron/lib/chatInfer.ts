@@ -10,6 +10,8 @@ export type InferTarget = {
   model?: string;
   /** When set, sent as `Authorization: Bearer <key>` so test-chat reaches keyed containers. */
   apiKey?: string | null;
+  /** Server id for per-server generation tracking in Monitor. */
+  serverId?: string | null;
   markActivity?: () => void;
   /** Per-request thinking toggle (chat_template_kwargs.enable_thinking). */
   enableThinking?: boolean;
@@ -17,6 +19,8 @@ export type InferTarget = {
   modelHints?: Array<string | null | undefined>;
   /** Server context window — used to size max_tokens from remaining headroom. */
   contextLength?: number | null;
+  /** Abort upstream inference when the client disconnects. */
+  signal?: AbortSignal;
 };
 
 /** Rough prompt size for max_tokens budgeting (template overhead included). */
@@ -218,6 +222,7 @@ async function readSseStream(
   onDelta: (delta: StreamDelta) => void,
   startMs: number,
   collectReasoning: boolean,
+  signal?: AbortSignal,
 ): Promise<InferResult> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -250,13 +255,22 @@ async function readSseStream(
     if (chunk.content != null || chunk.reasoning != null) onDelta(chunk);
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) consume(line);
+  try {
+    while (true) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) consume(line);
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
   }
   if (buffer.trim()) consume(buffer);
 
@@ -288,7 +302,8 @@ export async function inferChatStream(
   opts: InferTarget & { onDelta: (delta: StreamDelta) => void },
 ): Promise<InferResult> {
   const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  generationTracker.start(lastUser);
+  const trackId = opts.serverId ?? "__default__";
+  generationTracker.start(trackId, lastUser);
   const startMs = Date.now();
   try {
     const enableThinking = opts.enableThinking === true;
@@ -307,20 +322,31 @@ export async function inferChatStream(
         stream_options: { include_usage: true },
         ...buildThinkingRequestParams(enableThinking, ...(opts.modelHints ?? [])),
       }),
+      signal: opts.signal,
     });
     opts.markActivity?.();
     if (!res.ok) {
       const text = await res.text();
-      generationTracker.fail(text);
+      generationTracker.fail(trackId, text);
       throw new Error(text);
     }
     if (!res.body) throw new Error("No response body from llama-server");
 
-    const result = await readSseStream(res.body, opts.onDelta, startMs, enableThinking);
-    generationTracker.finish(result.metrics);
+    const result = await readSseStream(
+      res.body,
+      opts.onDelta,
+      startMs,
+      enableThinking,
+      opts.signal,
+    );
+    generationTracker.finish(trackId, result.metrics);
     return result;
   } catch (e) {
-    generationTracker.fail(e instanceof Error ? e.message : String(e));
+    if (e instanceof DOMException && e.name === "AbortError") {
+      generationTracker.fail(trackId, "aborted");
+      throw e;
+    }
+    generationTracker.fail(trackId, e instanceof Error ? e.message : String(e));
     throw e;
   }
 }

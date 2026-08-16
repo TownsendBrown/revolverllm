@@ -9,6 +9,8 @@ services:
       dockerfile: docker/frontend/Dockerfile
     ports:
       - "${FRONTEND_PORT:-8080}:80"
+    environment:
+      REVOLVER_API_KEY: ${REVOLVER_API_KEY:-}
     depends_on:
       backend:
         condition: service_healthy
@@ -52,6 +54,9 @@ services:
       REVOLVER_GATEWAY_HOST: "0.0.0.0"
       REVOLVER_GATEWAY_PORT: "8081"
       PORT: "3001"
+      REVOLVER_API_KEY: ${REVOLVER_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
       # Host sysfs (Linux) so AMD GPUs are visible without the NVIDIA overlay.
       REVOLVER_SYSFS: /host/sys
     extra_hosts:

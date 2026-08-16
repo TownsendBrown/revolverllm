@@ -1,7 +1,8 @@
 import type { RevolverApi, SendMessageResult, StreamDelta } from "../shared/types";
+import { fetchWithAuth } from "./lib/apiAuth";
 
 async function post<T>(path: string, body: unknown = {}): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetchWithAuth(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -14,7 +15,7 @@ async function post<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 async function patch<T>(path: string, body: unknown = {}): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetchWithAuth(path, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -27,7 +28,7 @@ async function patch<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 async function del(path: string): Promise<void> {
-  const res = await fetch(path, { method: "DELETE" });
+  const res = await fetchWithAuth(path, { method: "DELETE" });
   if (!res.ok) {
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(err?.error ?? (await res.text()) ?? res.statusText);
@@ -35,7 +36,7 @@ async function del(path: string): Promise<void> {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetchWithAuth(path);
   if (!res.ok) {
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(err?.error ?? ((await res.text()) || res.statusText));
@@ -86,7 +87,7 @@ async function streamSendMessage(
 ): Promise<SendMessageResult> {
   let res: Response;
   try {
-    res = await fetch(`${base}/conversations/${id}/messages/stream`, {
+    res = await fetchWithAuth(`${base}/conversations/${id}/messages/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ content, serverId, enableThinking }),
@@ -152,10 +153,31 @@ export function createWebApi(base = "/api"): RevolverApi {
     getPaths: () => get(p("/paths")),
     getConfig: () => get(p("/config")),
     setConfig: (patch) => post(p("/config"), patch),
+    getSettings: () => get(p("/settings")),
+    setSettings: (patch) => post(p("/settings"), patch),
+    setHfToken: (token) => post(p("/secrets/hf-token"), { token }),
+    clearHfToken: () => post(p("/secrets/hf-token/clear")),
+    searchHubModels: (query, filter = "all", sort = "downloads") =>
+      get(
+        p(
+          `/hub/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,
+        ),
+      ),
+    listHubRepoFiles: (repoId, revision = "main") =>
+      get(
+        p(
+          `/hub/files?repoId=${encodeURIComponent(repoId)}&revision=${encodeURIComponent(revision)}`,
+        ),
+      ),
+    startModelDownload: (req) => post(p("/downloads"), req),
+    listDownloads: () => get(p("/downloads")),
+    getDownload: (jobId) => get(p(`/downloads/${encodeURIComponent(jobId)}`)),
+    cancelDownload: (jobId) => post(p(`/downloads/${encodeURIComponent(jobId)}/cancel`)),
     getGpu: () => get(p("/gpu")),
     getPlatform: () => get(p("/platform")),
     getMonitor: () => get(p("/monitor")),
     getModels: () => get(p("/models")),
+    deleteLocalModel: (id) => post(p("/models/delete"), { id }),
     getEngines: () => get(p("/engines")),
     estimateVram: (opts) => post(p("/vram/estimate"), opts),
     loadModel: (opts) => post(p("/models/load"), opts),
@@ -199,6 +221,7 @@ export function createWebApi(base = "/api"): RevolverApi {
         enableThinking: opts?.enableThinking,
       });
     },
+    cancelChatStream: async () => {},
     openPath: (path) => post(p("/open-path"), { path }),
     focusWindow: async () => {},
     listBenchmarkDefinitions: () => get(p("/benchmarks/definitions")),
@@ -214,7 +237,7 @@ export function createWebApi(base = "/api"): RevolverApi {
         humanNotes,
       }),
     readBenchmarkArtifact: async (runId, testId, filename) => {
-      const res = await fetch(
+      const res = await fetchWithAuth(
         p(`/benchmarks/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(testId)}/${encodeURIComponent(filename)}`),
       );
       if (!res.ok) throw new Error(await res.text());

@@ -70,17 +70,37 @@ const VLLM_LOAD_STEPS: LoadStep[] = [
   },
 ];
 
+const MLX_LOAD_STEPS: LoadStep[] = [
+  {
+    id: "spawn",
+    label: "Starting MLX server",
+    test: (t) => /mlx_lm\.server|\[native\] mlx_lm\.server/.test(t),
+  },
+  {
+    id: "weights",
+    label: "Loading weights",
+    test: (t) => /Loading|Fetching|Downloaded|huggingface/i.test(t),
+  },
+  {
+    id: "ready",
+    label: "Ready",
+    test: (t) => /Starting httpd at|\[revolver\] ready on/.test(t),
+  },
+];
+
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
 function loadStepsForEngine(engine?: EngineId | string | null): LoadStep[] {
   if (engine === "vllm" || engine === "vllm-legacy") return VLLM_LOAD_STEPS;
+  if (engine === "mlx") return MLX_LOAD_STEPS;
   return LLAMACPP_LOAD_STEPS;
 }
 
 function loadTimeBudgetMs(engine?: EngineId | string | null): number {
   if (engine === "vllm" || engine === "vllm-legacy") return 180_000;
+  if (engine === "mlx") return 120_000;
   return 55_000;
 }
 
@@ -140,7 +160,7 @@ export function parseLoadProgress(
 }
 
 const IMPORTANT =
-  /\[revolver\]|model loaded|server is listening|print_timing|eval time|tokens per second|\btg\s*=\s*[\d.]+\s*t\/s|operator\(\): cleaning|exited|error|fatal|Starting to load model|Loading safetensors|Application startup complete|Starting vLLM API server/i;
+  /\[revolver\]|model loaded|server is listening|print_timing|eval time|tokens per second|\btg\s*=\s*[\d.]+\s*t\/s|operator\(\): cleaning|exited|error|fatal|Starting to load model|Loading safetensors|Application startup complete|Starting vLLM API server|Starting httpd at|mlx_lm\.server/i;
 
 export function filterLogLines(lines: string[], verbose: boolean): string[] {
   if (verbose) return lines;

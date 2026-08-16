@@ -196,6 +196,7 @@ export default function ChatPanel({
     if (!streamAbortRef.current) return;
     streamAbortRef.current.abort();
     streamAbortRef.current = null;
+    void api.cancelChatStream();
     setSending(false);
   }, []);
 

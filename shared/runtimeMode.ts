@@ -16,19 +16,24 @@ export function defaultRuntimeMode(): ServerRuntimeMode {
  * then `REVOLVER_RUNTIME`, then docker.
  */
 export function resolveServerRuntime(
-  def: Pick<ServerDefinition, "backend" | "runtime">,
+  def: Pick<ServerDefinition, "backend" | "runtime" | "engine">,
 ): ResolvedRuntime {
+  if (def.engine === "mlx") return "native";
   if (def.backend === "metal") return "metal";
   if (def.runtime === "native" || def.runtime === "docker") return def.runtime;
   return "docker";
 }
 
-export function isNativeRuntime(def: Pick<ServerDefinition, "backend" | "runtime">): boolean {
+export function isNativeRuntime(
+  def: Pick<ServerDefinition, "backend" | "runtime" | "engine">,
+): boolean {
   return resolveServerRuntime(def) === "native";
 }
 
-/** Native llama-server and Metal host-agent see host filesystem paths. */
-export function usesHostModelPaths(def: Pick<ServerDefinition, "backend" | "runtime">): boolean {
+/** Native llama-server, MLX, and Metal host-agent see host filesystem paths. */
+export function usesHostModelPaths(
+  def: Pick<ServerDefinition, "backend" | "runtime" | "engine">,
+): boolean {
   const runtime = resolveServerRuntime(def);
   return runtime === "native" || runtime === "metal";
 }
@@ -38,7 +43,7 @@ export function usesHostModelPaths(def: Pick<ServerDefinition, "backend" | "runt
  * Docker `--gpus device=` renumbers cards to 0..n-1; native uses host indices.
  */
 export function cudaVisibleDevices(
-  def: Pick<ServerDefinition, "backend" | "runtime" | "gpuDevices">,
+  def: Pick<ServerDefinition, "backend" | "runtime" | "gpuDevices" | "engine">,
 ): string | undefined {
   if (def.backend !== "cuda" || !def.gpuDevices.length) return undefined;
   if (resolveServerRuntime(def) === "docker") {
@@ -56,7 +61,7 @@ export function rocmVisibleDevices(
 
 /** `*_VISIBLE_DEVICES` fragment written into the engine env file. */
 export function visibleDeviceEnv(
-  def: Pick<ServerDefinition, "backend" | "runtime" | "gpuDevices">,
+  def: Pick<ServerDefinition, "backend" | "runtime" | "gpuDevices" | "engine">,
 ): Record<string, string> {
   const env: Record<string, string> = {};
   const cuda = cudaVisibleDevices(def);

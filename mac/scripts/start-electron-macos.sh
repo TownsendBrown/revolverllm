@@ -37,4 +37,4 @@ unset REVOLVER_LLAMA_SOCKET
 echo "[mac] starting Electron (Metal + CPU backends only)"
 npm run rebuild:native
 npm run build
-exec env -u ELECTRON_RUN_AS_NODE ELECTRON_NO_SANDBOX=1 electron . --no-sandbox
+exec env -u ELECTRON_RUN_AS_NODE electron .

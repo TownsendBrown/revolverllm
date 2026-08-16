@@ -10,6 +10,7 @@ import { clampContextLength } from "../electron/lib/contextLength";
 import { effectiveGpuLayers } from "../electron/lib/vram";
 import { loadRuntimeConfig } from "../electron/lib/runtimeConfig";
 import { loadServerConfig, serverBaseUrl, serverEndpoints } from "../electron/lib/serverConfig";
+import { jitStatusFromConfig } from "../electron/lib/settings";
 import { DEFAULT_ENGINE, getEngine } from "../engines";
 import type {
   CreateServerRequest,
@@ -21,10 +22,11 @@ import type {
   ServerInstanceStatus,
   ServersOverview,
 } from "../shared/types";
-import { defaultRuntimeMode } from "../shared/runtimeMode";
+import { defaultRuntimeMode, inComposeBackend } from "../shared/runtimeMode";
 import { removeServerRuntime } from "./serverRuntime";
 import { InstanceRuntime } from "./instanceRuntime";
 import { probeNativeRuntime } from "./llamaServerBin";
+import { probeMlxRuntime } from "./mlxServerBin";
 import {
   buildGatewayModelEntries,
   resolveGatewayRouteFromEntries,
@@ -114,7 +116,7 @@ export const serverManager = {
       logsFiltered: primary?.logsFiltered ?? [],
       containerLogs: primary?.containerLogs ?? [],
       serverLogs: primary?.serverLogs ?? [],
-      jit: { enabled: false, autoEvict: false, ttlSeconds: 0 },
+      jit: jitStatusFromConfig(),
       ttlExpiresAt: null,
       generation: primary?.generation ?? null,
       primaryServerId: primary?.definition.id ?? null,
@@ -132,17 +134,37 @@ export const serverManager = {
     if (!engine.supportsBackend(req.backend)) {
       throw new Error(`${engine.label} does not support backend ${req.backend}`);
     }
-    if (req.backend === "metal" && engineId !== "llamacpp") {
-      throw new Error("Metal backend only supports llama.cpp");
+    if (req.backend === "metal" && engineId !== "llamacpp" && engineId !== "mlx") {
+      throw new Error("Metal backend only supports llama.cpp and MLX");
+    }
+    if (engineId === "mlx") {
+      if (process.platform !== "darwin") {
+        throw new Error("MLX is macOS only (Apple Silicon)");
+      }
+      if (inComposeBackend()) {
+        throw new Error(
+          "MLX requires a host process — run Electron on the Mac, not the Compose backend",
+        );
+      }
     }
 
-    const runtime = req.backend === "metal" ? undefined : (req.runtime ?? defaultRuntimeMode());
+    const runtime =
+      engineId === "mlx"
+        ? "native"
+        : req.backend === "metal"
+          ? undefined
+          : (req.runtime ?? defaultRuntimeMode());
     if (runtime === "native") {
       if (!engine.capabilities.supportsNative) {
-        throw new Error(`${engine.label} requires Docker — native runtime is llama.cpp only`);
+        throw new Error(`${engine.label} requires Docker — native runtime is llama.cpp / MLX only`);
       }
-      const probe = probeNativeRuntime();
-      if (!probe.available) throw new Error(probe.error ?? "Native llama-server is not available");
+      if (engineId === "mlx") {
+        const mlx = probeMlxRuntime();
+        if (!mlx.available) throw new Error(mlx.error ?? "mlx-lm is not available");
+      } else {
+        const probe = probeNativeRuntime();
+        if (!probe.available) throw new Error(probe.error ?? "Native llama-server is not available");
+      }
     }
 
     const ctx = clampContextLength(req.contextLength);
@@ -229,7 +251,14 @@ export const serverManager = {
 
   async inferTarget(
     serverId?: string | null,
-  ): Promise<{ host: string; port: number; model: string; apiKey: string | null; markActivity: () => void }> {
+  ): Promise<{
+    host: string;
+    port: number;
+    model: string;
+    apiKey: string | null;
+    serverId: string;
+    markActivity: () => void;
+  }> {
     let rt: InstanceRuntime | null = null;
     if (serverId) rt = runtimeFor(serverId);
     if (!rt) {
@@ -242,11 +271,13 @@ export const serverManager = {
     }
     if (!rt?.isRunning()) throw new Error("No model loaded on selected server");
     const model = await rt.ensureInferenceModel();
+    const id = rt.definition.id;
     return {
       host: rt.getHost(),
       port: rt.getPort(),
       model,
       apiKey: rt.getApiKey(),
+      serverId: id,
       markActivity: () => rt!.markActivity(),
     };
   },

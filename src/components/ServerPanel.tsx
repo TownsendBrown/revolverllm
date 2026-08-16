@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import LoadProgressBar from "./LoadProgressBar";
+import HubBrowser from "./HubBrowser";
 import { useStickyScroll } from "../lib/useStickyScroll";
 import {
   api,
@@ -47,7 +48,7 @@ type WizardStep = "backend" | "gpu" | "model" | "engine" | "config" | "review";
 const DOCKER_GPU_BACKENDS = new Set<InferenceBackend>(["cuda", "rocm", "vulkan"]);
 
 const BACKENDS: { id: InferenceBackend; label: string; hint: string }[] = [
-  { id: "metal", label: "Metal (macOS)", hint: "Apple Silicon GPU via native llama-server" },
+  { id: "metal", label: "Metal (macOS)", hint: "Apple Silicon GPU via llama-server or MLX" },
   { id: "cuda", label: "CUDA", hint: "NVIDIA GPUs via llama.cpp CUDA backend" },
   { id: "rocm", label: "ROCm", hint: "AMD GPUs (gfx1030+). Navi 10 / RX 5700 XT: use Vulkan" },
   { id: "vulkan", label: "Vulkan", hint: "AMD, Intel, and NVIDIA via Vulkan (RADV for RX 5700 XT)" },
@@ -137,6 +138,20 @@ function renderEngineField(
       </label>
     );
   }
+  if (field.type === "text") {
+    return (
+      <label key={field.key} className="span-2">
+        {field.label}
+        <input
+          id={id}
+          type="text"
+          value={String(value ?? field.default ?? "")}
+          onChange={(e) => onChange(field.key, e.target.value)}
+        />
+        {field.hint && <span className="field-hint">{field.hint}</span>}
+      </label>
+    );
+  }
   return (
     <label key={field.key}>
       {field.label}
@@ -192,6 +207,9 @@ export default function ServerPanel({
   const [nativeAvailable, setNativeAvailable] = useState(false);
   const [nativeError, setNativeError] = useState<string | undefined>();
   const [nativeBackendPack, setNativeBackendPack] = useState<string | null>(null);
+  const [mlxAvailable, setMlxAvailable] = useState(false);
+  const [mlxError, setMlxError] = useState<string | undefined>();
+  const [hostOs, setHostOs] = useState<string>("other");
   const [defaultRuntime, setDefaultRuntime] = useState<ServerRuntimeMode>("docker");
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
@@ -259,6 +277,9 @@ export default function ServerPanel({
         setNativeAvailable(p.native);
         setNativeError(p.nativeError);
         setNativeBackendPack(p.nativeBackendPack ?? null);
+        setMlxAvailable(p.mlx);
+        setMlxError(p.mlxError);
+        setHostOs(p.os);
         const next = initialWizardRuntime({
           defaultRuntime: p.defaultRuntime,
           native: p.native,
@@ -324,6 +345,10 @@ export default function ServerPanel({
     const ids = selectedCatalogModel ? new Set(selectedCatalogModel.compatibleEngines) : null;
     return engines.filter((e) => {
       if (ids && !ids.has(e.id)) return false;
+      if (e.id === "mlx") {
+        if (hostOs !== "darwin") return false;
+        return backend === "metal" || backend === "cpu";
+      }
       if (runtime === "native") return e.capabilities.supportsNative;
       if (backend === "metal") return e.capabilities.supportsMetal;
       if (backend === "cuda") return e.capabilities.supportsCUDA;
@@ -332,7 +357,7 @@ export default function ServerPanel({
       if (backend === "cpu") return e.capabilities.supportsCPU;
       return true;
     });
-  }, [engines, selectedCatalogModel, backend, runtime]);
+  }, [engines, selectedCatalogModel, backend, runtime, hostOs]);
 
   const activeEngineInfo = useMemo(
     () => compatibleEngines.find((e) => e.id === engine) ?? compatibleEngines[0] ?? null,
@@ -459,7 +484,11 @@ export default function ServerPanel({
       });
     }
     if (wizardStep === "model") return selectedModel && selectedHasWeights;
-    if (wizardStep === "engine") return compatibleEngines.length > 0;
+    if (wizardStep === "engine") {
+      if (!compatibleEngines.length) return false;
+      if (engine === "mlx" && !mlxAvailable) return false;
+      return true;
+    }
     if (wizardStep === "config") return true;
     return !validateBackendDevices(backend, gpu?.devices ?? [], gpuDevices);
   };
@@ -504,8 +533,8 @@ export default function ServerPanel({
       const req: CreateServerRequest = {
         name: serverName.trim() || undefined,
         engine,
-        backend,
-        runtime: backend === "metal" ? undefined : runtime,
+        backend: engine === "mlx" ? (backend === "cpu" ? "cpu" : "metal") : backend,
+        runtime: engine === "mlx" ? "native" : backend === "metal" ? undefined : runtime,
         gpuDevices: backend === "cpu" || backend === "metal" ? [] : gpuDevices,
         gpuMode: gpuDevices.length >= 2 ? gpuMode : "single",
         modelId: selectedModel,
@@ -701,19 +730,22 @@ export default function ServerPanel({
             <div className="wizard-body model-wizard-list">
               <div className="panel-head">
                 <span>Model</span>
-                <button
-                  className="ghost"
-                  onClick={async () => {
-                    const path = await api.pickModelFile();
-                    if (path) {
-                      setSelectedModel(path);
-                      setSelectedHasWeights(true);
-                    }
-                  }}
-                >
-                  Open GGUF…
-                </button>
+                {typeof window !== "undefined" && window.revolver && (
+                  <button
+                    className="ghost"
+                    onClick={async () => {
+                      const path = await api.pickModelFile();
+                      if (path) {
+                        setSelectedModel(path);
+                        setSelectedHasWeights(true);
+                      }
+                    }}
+                  >
+                    Open GGUF…
+                  </button>
+                )}
               </div>
+              <HubBrowser compact onDownloadComplete={onRefresh} />
               <div className="model-scroll">
                 {models
                   .filter((m) => m.hasWeights)
@@ -753,7 +785,7 @@ export default function ServerPanel({
               {compatibleEngines.length === 0 ? (
                 <p className="field-hint warn">
                   {runtime === "native"
-                    ? "Native runtime is llama.cpp (GGUF) only. Switch to Docker for vLLM, or pick a GGUF model."
+                    ? "Native runtime is llama.cpp (GGUF) or MLX (macOS safetensors). Switch to Docker for vLLM, or pick a matching model."
                     : "No engines support this model on the selected backend."}
                 </p>
               ) : (
@@ -761,11 +793,17 @@ export default function ServerPanel({
                   {compatibleEngines.map((e) => (
                     <button
                       key={e.id}
-                      className={`backend-card ${engine === e.id ? "sel" : ""}`}
+                      className={`backend-card ${engine === e.id ? "sel" : ""} ${e.id === "mlx" && !mlxAvailable ? "blocked" : ""}`}
                       onClick={() => setEngine(e.id)}
                     >
                       <strong>{e.label}</strong>
                       <span>{e.description}</span>
+                      {e.id === "mlx" && !mlxAvailable && (
+                        <span className="field-hint warn">{mlxError ?? "mlx-lm not installed in mlx/.venv"}</span>
+                      )}
+                      {e.id === "mlx" && mlxAvailable && (
+                        <span className="backend-rec">macOS native</span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -855,7 +893,7 @@ export default function ServerPanel({
                 <dt>Backend</dt>
                 <dd>{backend.toUpperCase()}</dd>
                 <dt>Runtime</dt>
-                <dd>{backend === "metal" ? "native (Metal host-agent)" : runtime === "native" ? "native process" : "Docker container"}</dd>
+                <dd>{engine === "mlx" ? "native mlx_lm.server" : backend === "metal" ? "native (Metal host-agent)" : runtime === "native" ? "native process" : "Docker container"}</dd>
                 <dt>Engine</dt>
                 <dd>{activeEngineInfo?.label ?? engine}</dd>
                 {backend !== "cpu" && (

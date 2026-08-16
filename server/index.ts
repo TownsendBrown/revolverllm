@@ -1,14 +1,39 @@
 import cors from "cors";
 import express from "express";
 import { handlers } from "./handlers";
+import { apiAuthMiddleware, getApiKey, seedApiKeyFromEnv } from "./apiAuth";
+import { dockerHealth } from "./containerUtils";
+import { inComposeBackend } from "../shared/runtimeMode";
+import { isGatewayRunning, startOpenAiGateway } from "./openaiGateway";
 import { serverManager } from "./serverManager";
-import { startOpenAiGateway } from "./openaiGateway";
 
 const app = express();
 const port = Number(process.env.PORT ?? "3001");
 
-app.use(cors());
+seedApiKeyFromEnv();
+
+const apiKey = getApiKey();
+if (apiKey && !process.env.REVOLVER_COMPOSE) {
+  console.log(`[revolver] API key (Bearer): ${apiKey}`);
+}
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      try {
+        const u = new URL(origin);
+        if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return cb(null, true);
+      } catch {
+        /* ignore */
+      }
+      cb(null, false);
+    },
+  }),
+);
 app.use(express.json({ limit: "2mb" }));
+
+app.use("/api", apiAuthMiddleware);
 
 type HandlerName = keyof typeof handlers;
 
@@ -16,10 +41,19 @@ const routes: Array<{ method: "get" | "post"; path: string; name: HandlerName }>
   { method: "get", path: "/api/paths", name: "getPaths" },
   { method: "get", path: "/api/config", name: "getConfig" },
   { method: "post", path: "/api/config", name: "setConfig" },
+  { method: "get", path: "/api/settings", name: "getSettings" },
+  { method: "post", path: "/api/settings", name: "setSettings" },
+  { method: "post", path: "/api/secrets/hf-token", name: "setHfToken" },
+  { method: "post", path: "/api/secrets/hf-token/clear", name: "clearHfToken" },
+  { method: "get", path: "/api/hub/search", name: "searchHubModels" },
+  { method: "get", path: "/api/hub/files", name: "listHubRepoFiles" },
+  { method: "post", path: "/api/downloads", name: "startModelDownload" },
+  { method: "get", path: "/api/downloads", name: "listDownloads" },
   { method: "get", path: "/api/gpu", name: "getGpu" },
   { method: "get", path: "/api/platform", name: "getPlatform" },
   { method: "get", path: "/api/monitor", name: "getMonitor" },
   { method: "get", path: "/api/models", name: "getModels" },
+  { method: "post", path: "/api/models/delete", name: "deleteLocalModel" },
   { method: "get", path: "/api/engines", name: "getEngines" },
   { method: "post", path: "/api/vram/estimate", name: "estimateVram" },
   { method: "post", path: "/api/models/load", name: "loadModel" },
@@ -38,13 +72,29 @@ for (const route of routes) {
   app[route.method](route.path, async (req, res) => {
     try {
       const fn = handlers[route.name] as (...args: unknown[]) => unknown;
-      const body = route.method === "get" ? undefined : (req.body ?? {});
-      const result =
-        route.name === "openPath"
-          ? await fn(body.path ?? body)
-          : route.method === "get"
-            ? await fn()
-            : await fn(body);
+      let result: unknown;
+      if (route.name === "openPath") {
+        result = await fn((req.body ?? {}).path ?? req.body);
+      } else if (route.name === "searchHubModels") {
+        const query = typeof req.query.q === "string" ? req.query.q : "";
+        const filter = typeof req.query.filter === "string" ? req.query.filter : "all";
+        const sort = typeof req.query.sort === "string" ? req.query.sort : "downloads";
+        result = await fn(
+          query,
+          filter === "gguf" || filter === "safetensors" || filter === "mlx" ? filter : "all",
+          sort,
+        );
+      } else if (route.name === "listHubRepoFiles") {
+        const repoId = typeof req.query.repoId === "string" ? req.query.repoId : "";
+        const revision = typeof req.query.revision === "string" ? req.query.revision : "main";
+        result = await fn(repoId, revision);
+      } else if (route.name === "setHfToken") {
+        result = await fn(String((req.body ?? {}).token ?? ""));
+      } else if (route.method === "get") {
+        result = await fn();
+      } else {
+        result = await fn(req.body ?? {});
+      }
       res.json(result);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -53,6 +103,24 @@ for (const route of routes) {
     }
   });
 }
+
+app.get("/api/downloads/:id", async (req, res) => {
+  try {
+    res.json(await handlers.getDownload(req.params.id));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+  }
+});
+
+app.post("/api/downloads/:id/cancel", async (req, res) => {
+  try {
+    res.json(await handlers.cancelDownload(req.params.id));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
 
 app.get("/api/server/status", async (req, res) => {
   try {
@@ -207,29 +275,31 @@ app.post("/api/conversations/:id/messages/stream", async (req, res) => {
   res.flushHeaders?.();
   res.write(": connected\n\n");
 
-  let clientClosed = false;
-  const markClosed = () => {
-    clientClosed = true;
-  };
-  res.on("close", markClosed);
+  const abort = new AbortController();
 
   const heartbeat = setInterval(() => {
-    if (clientClosed || res.writableEnded) return;
+    if (abort.signal.aborted || res.writableEnded) return;
     try {
       res.write(": ping\n\n");
     } catch {
-      clientClosed = true;
+      abort.abort();
     }
   }, 15000);
 
   const writeEvent = (payload: unknown) => {
-    if (clientClosed || res.writableEnded) return;
+    if (abort.signal.aborted || res.writableEnded) return;
     try {
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     } catch {
-      clientClosed = true;
+      abort.abort();
     }
   };
+
+  const onClientClose = () => {
+    abort.abort();
+  };
+  req.on("close", onClientClose);
+  res.on("close", onClientClose);
 
   try {
     const result = await handlers.sendMessage(
@@ -240,14 +310,19 @@ app.post("/api/conversations/:id/messages/stream", async (req, res) => {
         writeEvent({ delta });
       },
       enableThinking,
+      abort.signal,
     );
-    writeEvent({ done: true, result });
+    if (!abort.signal.aborted) {
+      writeEvent({ done: true, result });
+    }
   } catch (e) {
+    if (abort.signal.aborted) return;
     const message = e instanceof Error ? e.message : String(e);
     writeEvent({ error: message });
   } finally {
     clearInterval(heartbeat);
-    res.off("close", markClosed);
+    req.off("close", onClientClose);
+    res.off("close", onClientClose);
     if (!res.writableEnded) res.end();
   }
 });
@@ -342,11 +417,29 @@ app.get("/api/benchmarks/runs/:runId/artifacts/:testId/:filename", async (req, r
   }
 });
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, docker: true });
+app.get("/health", async (_req, res) => {
+  try {
+    const docker = await dockerHealth();
+    const gateway = isGatewayRunning();
+    const compose = inComposeBackend();
+    const ok = compose ? docker.available : true;
+    res.status(ok ? 200 : 503).json({
+      ok,
+      docker: docker.available,
+      dockerError: docker.error,
+      gateway,
+      compose,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(503).json({ ok: false, error: message });
+  }
 });
 
 async function start(): Promise<void> {
+  const { bootstrapHfToken } = await import("../electron/lib/secrets");
+  bootstrapHfToken();
+
   process.on("unhandledRejection", (reason) => {
     console.error("[revolver] unhandledRejection:", reason);
   });

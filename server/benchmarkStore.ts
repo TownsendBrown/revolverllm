@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, resolve, sep } from "path";
 import { getDataDir } from "../electron/lib/config";
 import type { BenchmarkRun, BenchmarkTestResult } from "../shared/benchmarks/types";
 
@@ -83,8 +83,26 @@ export function writeArtifact(runId: string, testId: string, filename: string, c
   return `${testId}/${filename}`;
 }
 
+export function assertArtifactRelPath(relPath: string): void {
+  if (!relPath || relPath.startsWith("/") || relPath.includes("..")) {
+    throw new Error("Invalid artifact path");
+  }
+}
+
+function artifactWithinRun(runId: string, full: string): boolean {
+  const root = resolve(runArtifactsDir(runId));
+  const resolved = resolve(full);
+  return resolved === root || resolved.startsWith(root + sep);
+}
+
 export function readArtifact(runId: string, relPath: string): Buffer | null {
+  try {
+    assertArtifactRelPath(relPath);
+  } catch {
+    return null;
+  }
   const full = join(runArtifactsDir(runId), relPath);
+  if (!artifactWithinRun(runId, full)) return null;
   if (!existsSync(full)) return null;
   try {
     return readFileSync(full);

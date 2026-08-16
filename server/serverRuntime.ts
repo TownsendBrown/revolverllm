@@ -13,6 +13,7 @@ import {
 import { hostAgentCall, isMetalBackend, metalEnabled } from "./hostAgent";
 import { getNativeSupervisor } from "./nativeSupervisor";
 import { probeNativeRuntime } from "./llamaServerBin";
+import { probeMlxRuntime } from "./mlxServerBin";
 
 const HOST_AGENT_FAST_MS = 10_000;
 const HOST_AGENT_SLOW_MS = 120_000;
@@ -25,17 +26,23 @@ interface ServerInspect {
   startedAt: string | null;
 }
 
-function assertNativeAllowed(): string {
+function assertNativeAllowed(def: ServerDefinition): void {
   if (inComposeBackend()) {
     throw new Error(
       "Native inference is not available inside Docker Compose. Use Docker runtime, or run Electron on the host.",
     );
   }
+  if (def.engine === "mlx") {
+    const mlx = probeMlxRuntime();
+    if (!mlx.python) {
+      throw new Error(mlx.error ?? "mlx-lm not found");
+    }
+    return;
+  }
   const probe = probeNativeRuntime();
   if (!probe.bin) {
     throw new Error(probe.error ?? "llama-server binary not found");
   }
-  return probe.bin;
 }
 
 export async function ensureServerRuntime(def: ServerDefinition): Promise<void> {
@@ -51,9 +58,9 @@ export async function ensureServerRuntime(def: ServerDefinition): Promise<void> 
   if (isNativeRuntime(def)) {
     const engine = getEngine(def.engine);
     if (!engine.capabilities.supportsNative) {
-      throw new Error(`${engine.label} requires Docker — native runtime is llama.cpp only`);
+      throw new Error(`${engine.label} requires Docker — native runtime is llama.cpp / MLX only`);
     }
-    assertNativeAllowed();
+    assertNativeAllowed(def);
     getNativeSupervisor().ensure(def.id, def.hostPort);
     return;
   }
@@ -66,7 +73,7 @@ export async function restartServerRuntime(def: ServerDefinition): Promise<void>
     return;
   }
   if (isNativeRuntime(def)) {
-    assertNativeAllowed();
+    assertNativeAllowed(def);
     await getNativeSupervisor().restart(def.id, def.hostPort);
     return;
   }

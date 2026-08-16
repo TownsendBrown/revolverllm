@@ -1,9 +1,9 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { join, relative } from "path";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "fs";
+import { dirname, join, relative, resolve } from "path";
 import { load as yamlLoad } from "js-yaml";
 import { readGgufMetadataCached } from "./ggufMetadata";
 import { metaGet, metaNumber, metaString } from "./ggufMeta";
-import { getDownloadsDir, getHubModelsDir, getLocalPaths, getModelIndexCachePath } from "./paths";
+import { getDownloadsDir, getHubModelsDir, getLocalPaths, getModelIndexCachePath, loadConfig } from "./paths";
 import { readGgufCacheEntry } from "./localMeta";
 import { normalizeModelPath, toFsPath } from "./modelPaths";
 import { isHfRepoId, scanLocalHfModels, classifyLocalModelPath } from "./hfModels";
@@ -314,6 +314,83 @@ export function getCatalog(loadedModelIds: string | string[] | null) {
     models: buildCatalog(loadedModelIds),
     paths: { hub: paths.hubModels, downloads: getDownloadsDir(), root: paths.root },
   };
+}
+
+function resolveAllowedRoots(): string[] {
+  const cfg = loadConfig();
+  return [cfg.modelsDir, cfg.hubModelsDir].map((root) => {
+    const abs = resolve(root);
+    try {
+      return realpathSync(abs);
+    } catch {
+      return abs;
+    }
+  });
+}
+
+function assertUnderAllowedRoots(targetPath: string): string {
+  let resolved: string;
+  try {
+    resolved = realpathSync(resolve(targetPath));
+  } catch {
+    throw new Error(`Path not found: ${targetPath}`);
+  }
+  const roots = resolveAllowedRoots();
+  const allowed = roots.some((root) => resolved === root || resolved.startsWith(`${root}/`));
+  if (!allowed) {
+    throw new Error("Refusing to delete path outside model directories");
+  }
+  return resolved;
+}
+
+function modelInUse(entry: CatalogModel, inUseHints: string[]): boolean {
+  const hints = new Set(inUseHints.filter(Boolean));
+  if (hints.has(entry.id)) return true;
+  if (entry.path && hints.has(entry.path)) return true;
+  return false;
+}
+
+function resolveDeleteTargets(entry: CatalogModel): string[] {
+  if (entry.source === "file") {
+    if (!entry.path) throw new Error("Model path missing");
+    const targets = [entry.path];
+    const mmproj = findMmproj(dirname(entry.path), entry.path);
+    if (mmproj) targets.push(mmproj);
+    return targets;
+  }
+  if (entry.source === "huggingface") {
+    if (!entry.path) throw new Error("Model path missing");
+    return [entry.path];
+  }
+  if (entry.source === "hub") {
+    const hub = scanHubModels().find((h) => h.id === entry.id);
+    if (!hub) throw new Error("Hub model not found");
+    return [hub.hubPath];
+  }
+  throw new Error(`Unsupported model source: ${entry.source}`);
+}
+
+/** Delete a local model from disk. Refuses if in use on a running server. */
+export function deleteLocalModel(id: string, inUseHints: string[]): void {
+  const catalog = buildCatalog(inUseHints);
+  const entry = catalog.find((m) => m.id === id || m.path === id);
+  if (!entry) throw new Error("Model not found");
+  if (!entry.hasWeights) throw new Error("Model has no local weights to delete");
+  if (modelInUse(entry, inUseHints)) {
+    throw new Error("Model is loaded on a running server — stop the server first");
+  }
+
+  const targets = [...new Set(resolveDeleteTargets(entry))];
+  for (const target of targets) {
+    const resolved = assertUnderAllowedRoots(target);
+    if (!existsSync(resolved)) continue;
+    const st = statSync(resolved);
+    if (st.isDirectory()) {
+      rmSync(resolved, { recursive: true, force: true });
+    } else {
+      rmSync(resolved, { force: true });
+    }
+  }
 }
 
 export function normalizeGgufMeta(raw: Record<string, unknown>): Record<string, unknown> {

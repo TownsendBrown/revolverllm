@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ConfigPanel from "./components/ConfigPanel";
+import ModelsPanel from "./components/ModelsPanel";
 import ChatPanel from "./components/ChatPanel";
 import BenchmarkPanel from "./components/BenchmarkPanel";
 import Logo from "./components/Logo";
@@ -8,6 +9,7 @@ import ServerPanel from "./components/ServerPanel";
 import benchmarkIcon from "../icons/benchmark-icon.v2.svg";
 import configIcon from "../icons/config-icon.v6.svg";
 import chatIcon from "../icons/chat-icon.v1.svg";
+import modelsIcon from "../icons/models-icon.v1.svg";
 import monitorIcon from "../icons/monitor-icon.v2.svg";
 import serverIcon from "../icons/servers-icon.v2.svg";
 import {
@@ -19,7 +21,7 @@ import {
   type ServerStatus,
 } from "./revolver";
 
-type Tab = "chat" | "config" | "monitor" | "server" | "benchmarks";
+type Tab = "models" | "chat" | "config" | "monitor" | "server" | "benchmarks";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("chat");
@@ -120,6 +122,7 @@ export default function App() {
   }, [tab, shouldPoll, pullServerStatus]);
 
   const navIcons: Partial<Record<Tab, string>> = {
+    models: modelsIcon,
     chat: chatIcon,
     benchmarks: benchmarkIcon,
     config: configIcon,
@@ -129,6 +132,7 @@ export default function App() {
 
   const nav: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: "Chat", icon: ">" },
+    { id: "models", label: "Models", icon: "M" },
     { id: "benchmarks", label: "Benchmarks", icon: "B" },
     { id: "server", label: "Server", icon: "#" },
     { id: "config", label: "Config", icon: "*" },
@@ -146,10 +150,14 @@ export default function App() {
     });
 
   const dockerWarn =
-    platform?.os === "linux" && !platform.docker
-      ? `Docker is not available. Local servers need Docker.${
+    platform &&
+    !platform.docker &&
+    (platform.host === "compose" ||
+      platform.defaultRuntime === "docker" ||
+      (platform.dockerGpu && !platform.native))
+      ? `Docker is not available.${
           platform.dockerError ? ` ${platform.dockerError}` : ""
-        }`
+        } Use native runtime or install Docker.`
       : "";
 
   const canStopAll =
@@ -181,26 +189,28 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <Logo />
-        {nav.map((n) => {
-          const svgIcon = navIcons[n.id];
-          return (
-            <button
-              key={n.id}
-              className={`nav-btn ${tab === n.id ? "active" : ""}${svgIcon ? " nav-btn-icon-fill" : ""}`}
-              onClick={() => setTab(n.id)}
-              title={n.label}
-            >
-              <span className={`nav-icon${svgIcon ? " nav-icon-svg" : ""}`}>
-                {svgIcon ? (
-                  <img src={svgIcon} alt="" className="nav-icon-img" />
-                ) : (
-                  n.icon
-                )}
-              </span>
-              {!svgIcon && <span className="nav-label">{n.label}</span>}
-            </button>
-          );
-        })}
+        <div className="sidebar-nav">
+          {nav.map((n) => {
+            const svgIcon = navIcons[n.id];
+            return (
+              <button
+                key={n.id}
+                className={`nav-btn ${tab === n.id ? "active" : ""}${svgIcon ? " nav-btn-icon-fill" : ""}`}
+                onClick={() => setTab(n.id)}
+                title={n.label}
+              >
+                <span className={`nav-icon${svgIcon ? " nav-icon-svg" : ""}`}>
+                  {svgIcon ? (
+                    <img src={svgIcon} alt="" className="nav-icon-img" />
+                  ) : (
+                    n.icon
+                  )}
+                </span>
+                {!svgIcon && <span className="nav-label">{n.label}</span>}
+              </button>
+            );
+          })}
+        </div>
         <div className="sidebar-foot">
           {serverStatus?.activeCount ? (
             <>
@@ -261,12 +271,22 @@ export default function App() {
         {error && <div className="banner error">{error}</div>}
         {dockerWarn && <div className="banner warn">{dockerWarn}</div>}
 
+        {tab === "models" && (
+          <ModelsPanel
+            models={models}
+            platform={platform}
+            onRefresh={refresh}
+            onError={setError}
+          />
+        )}
+
         {tab === "config" && configDraft && (
           <ConfigPanel
             config={config}
             configDraft={configDraft}
             setConfigDraft={setConfigDraft}
             gpu={gpu}
+            platform={platform}
             onSavePaths={() =>
               api.setConfig(configDraft).then((c) => {
                 setConfig(c);

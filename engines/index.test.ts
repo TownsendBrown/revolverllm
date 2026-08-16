@@ -8,6 +8,7 @@ import {
   getEngine,
   listEngines,
 } from "./index";
+import { buildMlxLoadEnv } from "./mlx/config";
 import { buildVllmLegacyLoadEnv, normalizeLegacyDtype } from "./vllm-legacy/config";
 import { buildVllmLoadEnv } from "./vllm/config";
 import { resolveGgufTokenizer, resolveVllmTokenizerMode } from "./vllm/ggufTokenizer";
@@ -15,9 +16,9 @@ import type { ServerDefinition } from "../shared/types";
 import { parseLoadProgress } from "../electron/lib/serverLogParse";
 
 describe("engine registry", () => {
-  it("registers llama.cpp, vLLM, and vLLM Legacy", () => {
+  it("registers llama.cpp, vLLM, vLLM Legacy, and MLX", () => {
     const ids = listEngines().map((e) => e.id).sort();
-    assert.deepEqual(ids, ["llamacpp", "vllm", "vllm-legacy"]);
+    assert.deepEqual(ids, ["llamacpp", "mlx", "vllm", "vllm-legacy"]);
   });
 
   it("defaults to llama.cpp for legacy definitions", () => {
@@ -28,11 +29,19 @@ describe("engine registry", () => {
 
   it("exposes serializable engine metadata", () => {
     const infos = engineInfos();
-    assert.equal(infos.length, 3);
+    const ids = infos.map((i) => i.id).sort();
+    if (process.platform === "darwin") {
+      assert.deepEqual(ids, ["llamacpp", "mlx", "vllm", "vllm-legacy"]);
+    } else {
+      assert.deepEqual(ids, ["llamacpp", "vllm", "vllm-legacy"]);
+    }
     assert.ok(infos.every((i) => i.capabilities.api === "openai"));
     assert.equal(getEngine("llamacpp").capabilities.supportsNative, true);
     assert.equal(getEngine("vllm").capabilities.supportsNative, false);
     assert.equal(getEngine("vllm-legacy").capabilities.supportsNative, false);
+    assert.equal(getEngine("mlx").capabilities.supportsNative, true);
+    assert.equal(getEngine("mlx").supportsBackend("metal"), true);
+    assert.equal(getEngine("mlx").supportsBackend("cuda"), false);
   });
 });
 
@@ -47,8 +56,22 @@ describe("model compatibility", () => {
     }
   });
 
-  it("maps safetensors to vLLM and vLLM Legacy", () => {
-    assert.deepEqual(enginesForFormat("safetensors").sort(), ["vllm", "vllm-legacy"]);
+  it("maps safetensors to vLLM, vLLM Legacy, and MLX on macOS", () => {
+    const ids = enginesForFormat("safetensors").sort();
+    if (process.platform === "darwin") {
+      assert.deepEqual(ids, ["mlx", "vllm", "vllm-legacy"]);
+    } else {
+      assert.deepEqual(ids, ["vllm", "vllm-legacy"]);
+    }
+  });
+
+  it("maps MLX format to the MLX engine on macOS", () => {
+    const ids = enginesForFormat("mlx");
+    if (process.platform === "darwin") {
+      assert.deepEqual(ids, ["mlx"]);
+    } else {
+      assert.deepEqual(ids, []);
+    }
   });
 
   it("validates llama.cpp requires local GGUF", () => {
@@ -74,14 +97,12 @@ describe("model compatibility", () => {
   });
 
   it("excludes vLLM Pascal from gpt-oss safetensors catalog compatibility", () => {
-    assert.deepEqual(
-      enginesForModel({
-        format: "safetensors",
-        modelId: "openai/gpt-oss-20b",
-        modelType: "gpt_oss",
-      }),
-      ["vllm"],
-    );
+    const gptOss = enginesForModel({
+      format: "safetensors",
+      modelId: "openai/gpt-oss-20b",
+      modelType: "gpt_oss",
+    }).sort();
+    assert.deepEqual(gptOss, process.platform === "darwin" ? ["mlx", "vllm"] : ["vllm"]);
     assert.deepEqual(
       enginesForModel({
         format: "gguf",
@@ -91,13 +112,14 @@ describe("model compatibility", () => {
       }),
       ["llamacpp", "vllm"],
     );
+    const mistral = enginesForModel({
+      format: "safetensors",
+      modelId: "mistralai/Mistral-7B-v0.1",
+      modelType: "mistral",
+    }).sort();
     assert.deepEqual(
-      enginesForModel({
-        format: "safetensors",
-        modelId: "mistralai/Mistral-7B-v0.1",
-        modelType: "mistral",
-      }).sort(),
-      ["vllm", "vllm-legacy"],
+      mistral,
+      process.platform === "darwin" ? ["mlx", "vllm", "vllm-legacy"] : ["vllm", "vllm-legacy"],
     );
   });
 
@@ -229,5 +251,63 @@ describe("vLLM Pascal load env", () => {
     assert.ok(progress);
     assert.equal(progress!.stage, "Starting API server");
     assert.ok(progress!.percent >= 70);
+  });
+});
+
+describe("MLX engine", () => {
+  it("accepts safetensors and MLX weights, rejects GGUF", () => {
+    const mlx = getEngine("mlx");
+    assert.equal(
+      mlx.validateModel({
+        id: "LiquidAI/LFM2.5-1.2B-Instruct-MLX-8bit",
+        format: "mlx",
+        source: "local",
+        path: "/models/LiquidAI/LFM2.5-1.2B-Instruct-MLX-8bit",
+      }),
+      null,
+    );
+    assert.equal(
+      mlx.validateModel({ format: "safetensors", source: "huggingface", path: "org/model" }),
+      null,
+    );
+    assert.match(mlx.validateModel({ format: "gguf", source: "local", path: "/m.gguf" }) ?? "", /safetensors|MLX/);
+  });
+
+  it("writes native mlx_lm.server env", () => {
+    const def = {
+      id: "mlx1",
+      name: "lfm",
+      engine: "mlx",
+      backend: "metal",
+      runtime: "native",
+      gpuDevices: [],
+      gpuMode: "single",
+      modelId: "LiquidAI/LFM2.5-1.2B-Instruct-MLX-8bit",
+      modelPath: "/models/LiquidAI/LFM2.5-1.2B-Instruct-MLX-8bit",
+      mmprojPath: null,
+      contextLength: 8192,
+      nGpuLayers: -1,
+      kvCacheDtype: "f16",
+      engineConfig: {},
+      hostPort: 8099,
+      apiKey: null,
+      createdAt: "",
+      updatedAt: "",
+    } as ServerDefinition;
+    const plan = buildMlxLoadEnv(def);
+    assert.equal(plan.env.ENGINE, "mlx");
+    assert.equal(plan.env.MODEL, "/models/LiquidAI/LFM2.5-1.2B-Instruct-MLX-8bit");
+    assert.equal(plan.env.MLX_PORT, 8099);
+  });
+
+  it("parses MLX load progress from native logs", () => {
+    const lines = [
+      "[native] mlx_lm.server /opt/venv/bin/python --model /models/lfm --port 8099",
+      "Loading weights",
+      "Starting httpd at 127.0.0.1 on port 8099...",
+    ];
+    const progress = parseLoadProgress(lines, true, "loading", Date.now() - 5_000, "mlx");
+    assert.ok(progress);
+    assert.equal(progress!.stage, "Ready");
   });
 });

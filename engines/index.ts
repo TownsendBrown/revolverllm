@@ -28,11 +28,13 @@ export type {
 } from "./types";
 
 export function engineInfos(): EngineInfo[] {
-  return listEngines().map((e) => ({
-    id: e.id,
-    label: e.label,
-    description: e.description,
-    capabilities: e.capabilities,
-    configFields: e.configFields,
-  }));
+  return listEngines()
+    .filter((e) => e.id !== "mlx" || process.platform === "darwin")
+    .map((e) => ({
+      id: e.id,
+      label: e.label,
+      description: e.description,
+      capabilities: e.capabilities,
+      configFields: e.configFields,
+    }));
 }

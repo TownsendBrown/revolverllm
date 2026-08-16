@@ -151,9 +151,9 @@ export type GpuMode = "single" | "combined";
 export type ServerRuntimeMode = "docker" | "native";
 
 /** Inference implementation (what runs the model). Orthogonal to InferenceBackend (how it executes). */
-export type EngineId = "llamacpp" | "vllm" | "vllm-legacy";
+export type EngineId = "llamacpp" | "vllm" | "vllm-legacy" | "mlx";
 
-export type ModelFormat = "gguf" | "safetensors" | "awq" | "gptq";
+export type ModelFormat = "gguf" | "safetensors" | "awq" | "gptq" | "mlx";
 export type ModelSource = "local" | "huggingface";
 
 export interface EngineCapabilities {
@@ -165,7 +165,7 @@ export interface EngineCapabilities {
   supportsVulkan: boolean;
   supportsCPU: boolean;
   supportsMultiGPU: boolean;
-  /** Host-process llama-server (no Docker). llama.cpp only. */
+  /** Host-process inference (no Docker). llama.cpp and MLX. */
   supportsNative: boolean;
   api: "openai";
 }
@@ -394,6 +394,10 @@ export interface PlatformHostPaths {
 
 /** Runtime platform flags (not persisted). */
 export interface PlatformCapabilities {
+  /** electron desktop vs docker compose backend. */
+  host: "electron" | "compose";
+  /** When true, path fields in settings are read-only (Compose). */
+  pathSettingsLocked: boolean;
   /** True when Revolver runs with macOS Metal host-agent (docker:up:mac). */
   macMetal: boolean;
   /** True when the backend container was started with GPU support (LLAMA_GPU=1). */
@@ -406,6 +410,10 @@ export interface PlatformCapabilities {
   native: boolean;
   nativeError?: string;
   llamaServerBin?: string | null;
+  /** True when mlx-lm is importable on this Mac (native mlx_lm.server). */
+  mlx: boolean;
+  mlxError?: string;
+  mlxPython?: string | null;
   /** Installed CUDA pack id (e.g. linux-cuda-sm70). macOS Metal is not a pack. */
   nativeBackendPack?: string | null;
   /** Default for new servers (REVOLVER_RUNTIME or pack:native extraMetadata). */
@@ -436,6 +444,7 @@ export interface RevolverConfig {
 }
 
 export interface LocalSettings {
+  schemaVersion?: number;
   downloadsFolder: string;
   defaultContextLength: { type: string; value: number };
   enableLocalService: boolean;
@@ -444,6 +453,87 @@ export interface LocalSettings {
     customThresholdBytes: number;
     alwaysAllowLoadAnyway?: boolean;
   };
+}
+
+export interface GatewaySettingsView {
+  gatewayEnabled: boolean;
+  host: string;
+  port: number;
+  gatewayApiKey: string | null;
+  cors: boolean;
+}
+
+export interface DownloadSettingsView {
+  dest: "hub" | "models";
+  maxConcurrent: number;
+}
+
+export interface RevolverSettingsView {
+  schemaVersion: number;
+  host: "electron" | "compose";
+  pathSettingsLocked: boolean;
+  paths: RevolverConfig;
+  inferenceDefaults: RuntimeConfig;
+  gateway: GatewaySettingsView;
+  guardrails: LocalSettings["modelLoadingGuardrails"];
+  downloads: DownloadSettingsView;
+  hfTokenSet: boolean;
+  hasApiKey: boolean;
+}
+
+export type SettingsPatch = {
+  paths?: Partial<RevolverConfig>;
+  inferenceDefaults?: Partial<RuntimeConfig>;
+  gateway?: Partial<GatewaySettingsView>;
+  guardrails?: Partial<LocalSettings["modelLoadingGuardrails"]>;
+  downloads?: Partial<DownloadSettingsView>;
+};
+
+export type HubSearchSort = "downloads" | "likes" | "lastModified" | "trendingScore";
+
+export type HubFormatFilter = "all" | "gguf" | "safetensors" | "mlx";
+
+export interface HubModelSearchResult {
+  id: string;
+  author: string;
+  downloads: number;
+  likes: number;
+  lastModified: string | null;
+  sizeBytes: number | null;
+  tags: string[];
+  pipeline_tag: string | null;
+  gated: boolean;
+}
+
+export interface HubRepoFile {
+  path: string;
+  size: number | null;
+  oid: string;
+}
+
+export type DownloadJobStatus = "queued" | "running" | "done" | "error" | "cancelled";
+
+export interface DownloadJob {
+  id: string;
+  repoId: string;
+  revision: string;
+  dest: "hub" | "models";
+  files: string[] | null;
+  status: DownloadJobStatus;
+  progress: number;
+  bytesDone: number;
+  bytesTotal: number | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  localPath: string | null;
+}
+
+export interface StartModelDownloadRequest {
+  repoId: string;
+  revision?: string;
+  dest?: "hub" | "models";
+  files?: string[];
 }
 
 export interface ChatConversation {
@@ -526,6 +616,20 @@ export interface RevolverApi {
   getPaths(): Promise<LocalPaths & { settings: LocalSettings; config: RevolverConfig }>;
   getConfig(): Promise<RevolverConfig>;
   setConfig(patch: Partial<RevolverConfig>): Promise<RevolverConfig>;
+  getSettings(): Promise<RevolverSettingsView>;
+  setSettings(patch: SettingsPatch): Promise<RevolverSettingsView>;
+  setHfToken(token: string): Promise<{ hfTokenSet: boolean }>;
+  clearHfToken(): Promise<{ hfTokenSet: boolean }>;
+  searchHubModels(
+    query: string,
+    filter?: HubFormatFilter,
+    sort?: HubSearchSort,
+  ): Promise<HubModelSearchResult[]>;
+  listHubRepoFiles(repoId: string, revision?: string): Promise<HubRepoFile[]>;
+  startModelDownload(req: StartModelDownloadRequest): Promise<DownloadJob>;
+  listDownloads(): Promise<DownloadJob[]>;
+  getDownload(jobId: string): Promise<DownloadJob>;
+  cancelDownload(jobId: string): Promise<DownloadJob>;
   getGpu(): Promise<GpuInfo>;
   getPlatform(): Promise<PlatformCapabilities>;
   getMonitor(): Promise<MonitorSnapshot>;
@@ -533,6 +637,7 @@ export interface RevolverApi {
     models: CatalogModel[];
     paths: { hub: string; downloads: string; root: string };
   }>;
+  deleteLocalModel(id: string): Promise<void>;
   getEngines(): Promise<EngineInfo[]>;
   estimateVram(opts: {
     modelId?: string;
@@ -589,6 +694,8 @@ export interface RevolverApi {
     content: string,
     opts?: SendMessageOptions,
   ): Promise<SendMessageResult>;
+  /** Electron: abort in-flight streamed send. Web no-op — use opts.signal. */
+  cancelChatStream(): Promise<void>;
   openPath(path: string): Promise<string>;
   /** Electron: restore OS/webContents focus so chat inputs accept clicks after dialogs. */
   focusWindow(): Promise<void>;

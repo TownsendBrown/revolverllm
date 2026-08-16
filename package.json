@@ -11,7 +11,7 @@
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "rebuild:node": "npm rebuild better-sqlite3",
     "server": "tsx server/index.ts",
-    "start": "npm run rebuild:native && npm run build && env -u ELECTRON_RUN_AS_NODE ELECTRON_NO_SANDBOX=1 electron . --no-sandbox",
+    "start": "npm run rebuild:native && npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "start:macos": "mac/scripts/start-electron-macos.sh",
     "start:native": "scripts/start-electron-native.sh",
     "dev:native": "scripts/start-electron-native.sh --dev",
@@ -30,7 +30,7 @@
     "host-agent:stop": "mac/scripts/stop-host-agent.sh",
     "host-open-agent": "scripts/run-host-open-agent.sh",
     "host-open-agent:stop": "scripts/stop-host-open-agent.sh",
-    "test": "tsx --test engines/*.test.ts shared/*.test.ts shared/benchmarks/*.test.ts server/*.test.ts electron/lib/*.test.ts",
+    "test": "tsx --test engines/*.test.ts shared/*.test.ts shared/benchmarks/*.test.ts server/*.test.ts electron/lib/*.test.ts test/native/*.test.ts",
     "test:native": "tsx --test shared/runtimeMode.test.ts shared/nativeBackends.test.ts server/gpuClaims.test.ts server/llamaServerBin.test.ts server/nativeBackends.test.ts test/native/*.test.ts",
     "benchmark:e2e": "tsx scripts/run-benchmark-e2e.ts"
   },

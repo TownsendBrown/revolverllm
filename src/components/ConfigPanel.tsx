@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type GpuInfo, type RevolverConfig, type RuntimeConfig, type ServerConfig } from "../revolver";
+import {
+  api,
+  type GpuInfo,
+  type PlatformCapabilities,
+  type RevolverConfig,
+  type RevolverSettingsView,
+} from "../revolver";
 import { vendorLabel } from "../../shared/gpuDevices";
 
 type Props = {
@@ -7,6 +13,7 @@ type Props = {
   configDraft: RevolverConfig;
   setConfigDraft: (c: RevolverConfig) => void;
   gpu: GpuInfo | null;
+  platform: PlatformCapabilities | null;
   onSavePaths: () => void;
   onRefresh: () => void;
   onError: (message: string) => void;
@@ -21,29 +28,40 @@ export default function ConfigPanel({
   configDraft,
   setConfigDraft,
   gpu,
+  platform,
   onSavePaths,
   onRefresh,
   onError,
 }: Props) {
-  const [runtimeDraft, setRuntimeDraft] = useState<RuntimeConfig | null>(null);
-  const [gatewayDraft, setGatewayDraft] = useState<ServerConfig | null>(null);
+  const [settings, setSettings] = useState<RevolverSettingsView | null>(null);
+  const [settingsDraft, setSettingsDraft] = useState<RevolverSettingsView | null>(null);
 
-  useEffect(() => {
-    api.getRuntimeConfig().then(setRuntimeDraft);
-    api.getServerConfig().then(setGatewayDraft);
+  const loadSettings = useCallback(() => {
+    api.getSettings().then((s) => {
+      setSettings(s);
+      setSettingsDraft(s);
+    });
   }, []);
 
-  const saveRuntime = useCallback(async () => {
-    if (!runtimeDraft) return;
-    await api.setRuntimeConfig(runtimeDraft);
-    onRefresh();
-  }, [runtimeDraft, onRefresh]);
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
-  const saveGateway = useCallback(async () => {
-    if (!gatewayDraft) return;
-    await api.setServerConfig(gatewayDraft);
+  const saveSettings = useCallback(async () => {
+    if (!settingsDraft) return;
+    await api.setSettings({
+      paths: settingsDraft.paths,
+      inferenceDefaults: settingsDraft.inferenceDefaults,
+      gateway: settingsDraft.gateway,
+      guardrails: settingsDraft.guardrails,
+      downloads: settingsDraft.downloads,
+    });
+    loadSettings();
     onRefresh();
-  }, [gatewayDraft, onRefresh]);
+  }, [settingsDraft, loadSettings, onRefresh]);
+
+  const pathsLocked = platform?.pathSettingsLocked ?? false;
+  const hostPaths = platform?.hostPaths;
 
   return (
     <div className="config-layout">
@@ -81,141 +99,75 @@ export default function ConfigPanel({
       </section>
 
       <section className="panel">
-        <h3>Default load settings</h3>
-        <p className="muted">
-          Starting values for the Server tab. Per-model context can be changed before each load.
-        </p>
-        {runtimeDraft && (
-          <div className="config-form">
-            <label>
-              Default context length
-              <input
-                type="number"
-                min={512}
-                max={131072}
-                value={runtimeDraft.contextLength}
-                onChange={(e) =>
-                  setRuntimeDraft({ ...runtimeDraft, contextLength: Number(e.target.value) })
-                }
-              />
-              <span className="field-hint">Used when Server tab opens. Override per model before load.</span>
-            </label>
-            <label>
-              GPU layers (-1 = all)
-              <input
-                type="number"
-                value={runtimeDraft.nGpuLayers}
-                onChange={(e) =>
-                  setRuntimeDraft({ ...runtimeDraft, nGpuLayers: Number(e.target.value) })
-                }
-              />
-            </label>
-            <label>
-              KV cache dtype
-              <select
-                value={runtimeDraft.kvCacheDtype}
-                onChange={(e) =>
-                  setRuntimeDraft({ ...runtimeDraft, kvCacheDtype: e.target.value })
-                }
-              >
-                <option value="f16">f16</option>
-                <option value="f32">f32</option>
-                <option value="q8_0">q8_0</option>
-                <option value="q4_0">q4_0</option>
-              </select>
-            </label>
-            <button className="primary" onClick={saveRuntime}>
-              Save defaults
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section className="panel">
-        <h3>OpenAI gateway</h3>
-        <p className="muted">
-          Unified endpoint for external clients (Cline, Continue, etc.). Routes requests to running
-          servers by model name.
-        </p>
-        {gatewayDraft && (
-          <div className="config-form">
-            <label>
-              <input
-                type="checkbox"
-                checked={gatewayDraft.gatewayEnabled !== false}
-                onChange={(e) =>
-                  setGatewayDraft({ ...gatewayDraft, gatewayEnabled: e.target.checked })
-                }
-              />{" "}
-              Gateway enabled
-            </label>
-            <label>
-              Host
-              <input
-                value={gatewayDraft.host}
-                onChange={(e) => setGatewayDraft({ ...gatewayDraft, host: e.target.value })}
-              />
-              <span className="field-hint">Use 127.0.0.1 for local-only access.</span>
-            </label>
-            <label>
-              Port
-              <input
-                type="number"
-                min={1024}
-                max={65535}
-                value={gatewayDraft.port}
-                onChange={(e) =>
-                  setGatewayDraft({ ...gatewayDraft, port: Number(e.target.value) })
-                }
-              />
-            </label>
-            <label>
-              Gateway API key (optional)
-              <input
-                type="password"
-                value={gatewayDraft.gatewayApiKey ?? ""}
-                placeholder="Leave empty for open access"
-                onChange={(e) =>
-                  setGatewayDraft({
-                    ...gatewayDraft,
-                    gatewayApiKey: e.target.value.trim() || null,
-                  })
-                }
-              />
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={gatewayDraft.cors}
-                onChange={(e) => setGatewayDraft({ ...gatewayDraft, cors: e.target.checked })}
-              />{" "}
-              Enable CORS (browser clients)
-            </label>
-            <p className="mono small muted">
-              Base URL: http://{gatewayDraft.host === "0.0.0.0" ? "127.0.0.1" : gatewayDraft.host}:
-              {gatewayDraft.port}/v1
-            </p>
-            <button className="primary" onClick={saveGateway}>
-              Save gateway settings
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section className="panel">
         <h3>Model directories</h3>
+        {pathsLocked && (
+          <p className="banner warn">
+            Paths are locked in Docker Compose — set <code>MODELS_DIR</code> in <code>.env</code> and
+            recreate the container.
+          </p>
+        )}
+        {hostPaths && pathsLocked && (
+          <p className="mono small muted">
+            Host models: {hostPaths.modelsDir}
+            <br />
+            Host hub: {hostPaths.hubModelsDir}
+          </p>
+        )}
         <div className="config-form">
           <label>
-            GGUF models
+            GGUF / downloads root
             <input
-              value={configDraft.modelsDir}
-              onChange={(e) => setConfigDraft({ ...configDraft, modelsDir: e.target.value })}
+              value={settingsDraft?.paths.modelsDir ?? configDraft.modelsDir}
+              disabled={pathsLocked}
+              onChange={(e) => {
+                const modelsDir = e.target.value;
+                setConfigDraft({ ...configDraft, modelsDir });
+                setSettingsDraft((s: RevolverSettingsView | null) =>
+                  s ? { ...s, paths: { ...s.paths, modelsDir } } : s,
+                );
+              }}
             />
           </label>
-          <button className="primary" onClick={onSavePaths}>
-            Save paths
-          </button>
-          {config && (
+          <label>
+            Hub models directory
+            <input
+              value={settingsDraft?.paths.hubModelsDir ?? configDraft.hubModelsDir}
+              disabled={pathsLocked}
+              onChange={(e) => {
+                const hubModelsDir = e.target.value;
+                setConfigDraft({ ...configDraft, hubModelsDir });
+                setSettingsDraft((s: RevolverSettingsView | null) =>
+                  s ? { ...s, paths: { ...s.paths, hubModelsDir } } : s,
+                );
+              }}
+            />
+          </label>
+          <label>
+            Local metadata root
+            <input
+              value={settingsDraft?.paths.localRoot ?? configDraft.localRoot}
+              disabled={pathsLocked}
+              onChange={(e) => {
+                const localRoot = e.target.value;
+                setConfigDraft({ ...configDraft, localRoot });
+                setSettingsDraft((s: RevolverSettingsView | null) =>
+                  s ? { ...s, paths: { ...s.paths, localRoot } } : s,
+                );
+              }}
+            />
+          </label>
+          {!pathsLocked && (
+            <button
+              className="primary"
+              onClick={() => {
+                onSavePaths();
+                void saveSettings();
+              }}
+            >
+              Save paths
+            </button>
+          )}
+          {config && platform?.canOpenPath && (
             <button
               type="button"
               onClick={() =>
@@ -230,13 +182,221 @@ export default function ConfigPanel({
         </div>
       </section>
 
-      <section className="panel">
-        <h3>Inference</h3>
-        <p className="muted">
-          Models run in the <code>llama-server</code> Docker container (llama.cpp). Requires Docker on
-          the host.
-        </p>
-      </section>
+      {settingsDraft && (
+        <>
+          <section className="panel">
+            <h3>Default load settings</h3>
+            <div className="config-form">
+              <label>
+                Default context length
+                <input
+                  type="number"
+                  min={512}
+                  max={131072}
+                  value={settingsDraft.inferenceDefaults.contextLength}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      inferenceDefaults: {
+                        ...settingsDraft.inferenceDefaults,
+                        contextLength: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                GPU layers (-1 = all)
+                <input
+                  type="number"
+                  value={settingsDraft.inferenceDefaults.nGpuLayers}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      inferenceDefaults: {
+                        ...settingsDraft.inferenceDefaults,
+                        nGpuLayers: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                KV cache dtype
+                <select
+                  value={settingsDraft.inferenceDefaults.kvCacheDtype}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      inferenceDefaults: {
+                        ...settingsDraft.inferenceDefaults,
+                        kvCacheDtype: e.target.value,
+                      },
+                    })
+                  }
+                >
+                  <option value="f16">f16</option>
+                  <option value="f32">f32</option>
+                  <option value="q8_0">q8_0</option>
+                  <option value="q4_0">q4_0</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h3>VRAM guardrails</h3>
+            <div className="config-form">
+              <label>
+                Mode
+                <select
+                  value={settingsDraft.guardrails.mode}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      guardrails: { ...settingsDraft.guardrails, mode: e.target.value },
+                    })
+                  }
+                >
+                  <option value="off">Off</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              {settingsDraft.guardrails.mode === "custom" && (
+                <label>
+                  Custom threshold (bytes)
+                  <input
+                    type="number"
+                    value={settingsDraft.guardrails.customThresholdBytes}
+                    onChange={(e) =>
+                      setSettingsDraft({
+                        ...settingsDraft,
+                        guardrails: {
+                          ...settingsDraft.guardrails,
+                          customThresholdBytes: Number(e.target.value),
+                        },
+                      })
+                    }
+                  />
+                </label>
+              )}
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settingsDraft.guardrails.alwaysAllowLoadAnyway === true}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      guardrails: {
+                        ...settingsDraft.guardrails,
+                        alwaysAllowLoadAnyway: e.target.checked,
+                      },
+                    })
+                  }
+                />{" "}
+                Always allow “load anyway”
+              </label>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h3>OpenAI gateway</h3>
+            <p className="muted">
+              Unified endpoint for external clients (Cline, Continue, etc.). Uses the same Bearer key as
+              the control-plane API when set.
+            </p>
+            <div className="config-form">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settingsDraft.gateway.gatewayEnabled !== false}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      gateway: { ...settingsDraft.gateway, gatewayEnabled: e.target.checked },
+                    })
+                  }
+                />{" "}
+                Gateway enabled
+              </label>
+              <label>
+                Host
+                <input
+                  value={settingsDraft.gateway.host}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      gateway: { ...settingsDraft.gateway, host: e.target.value },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Port
+                <input
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={settingsDraft.gateway.port}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      gateway: { ...settingsDraft.gateway, port: Number(e.target.value) },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                API key
+                <input
+                  type="password"
+                  value={settingsDraft.gateway.gatewayApiKey ?? ""}
+                  placeholder={settings?.hasApiKey ? "••••••••" : "Leave empty for open access"}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      gateway: {
+                        ...settingsDraft.gateway,
+                        gatewayApiKey: e.target.value.trim() || null,
+                      },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settingsDraft.gateway.cors}
+                  onChange={(e) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      gateway: { ...settingsDraft.gateway, cors: e.target.checked },
+                    })
+                  }
+                />{" "}
+                Enable CORS (browser clients)
+              </label>
+              <button className="primary" onClick={() => saveSettings().catch((e) => onError(String(e)))}>
+                Save settings
+              </button>
+            </div>
+          </section>
+        </>
+      )}
+
+      {platform && (
+        <section className="panel">
+          <h3>Runtime</h3>
+          <p className="muted small">
+            Host: {platform.host} · Docker: {platform.docker ? "yes" : "no"} · Native llama-server:{" "}
+            {platform.native ? "yes" : "no"}
+            {platform.mlx ? " · MLX" : ""}
+          </p>
+        </section>
+      )}
     </div>
   );
 }

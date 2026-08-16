@@ -1,42 +1,47 @@
 import type { GenerationState } from "./types";
 
 /**
- * Tracks the in-flight (and most recently completed) chat generation so the UI
- * can show what prompt is being processed and at what stage. Shared by the
- * Electron main process and the Docker HTTP backend chat handlers.
+ * Tracks in-flight chat generation per server so concurrent chats do not clobber
+ * Monitor / Server status. Shared by Electron main and the Express backend.
  */
 class GenerationTracker {
-  private state: GenerationState | null = null;
-  private startMs = 0;
+  private byServer = new Map<string, { state: GenerationState; startMs: number }>();
 
-  start(prompt: string): void {
-    this.startMs = Date.now();
-    this.state = {
-      prompt: prompt.slice(0, 4000),
-      stage: "generating",
-      startedAt: new Date(this.startMs).toISOString(),
-      finishedAt: null,
-      elapsedMs: 0,
-      promptTokens: null,
-      completionTokens: null,
-      tokensPerSecond: null,
-      promptTokensPerSecond: null,
-      ttftMs: null,
-      error: null,
-    };
+  start(serverId: string, prompt: string): void {
+    const startMs = Date.now();
+    this.byServer.set(serverId, {
+      startMs,
+      state: {
+        prompt: prompt.slice(0, 4000),
+        stage: "generating",
+        startedAt: new Date(startMs).toISOString(),
+        finishedAt: null,
+        elapsedMs: 0,
+        promptTokens: null,
+        completionTokens: null,
+        tokensPerSecond: null,
+        promptTokensPerSecond: null,
+        ttftMs: null,
+        error: null,
+      },
+    });
   }
 
-  finish(metrics?: {
-    promptTokens: number | null;
-    completionTokens: number | null;
-    tokensPerSecond: number | null;
-    promptTokensPerSecond: number | null;
-    ttftMs: number | null;
-  }): void {
-    if (!this.state) return;
-    const elapsedMs = Date.now() - this.startMs;
-    this.state = {
-      ...this.state,
+  finish(
+    serverId: string,
+    metrics?: {
+      promptTokens: number | null;
+      completionTokens: number | null;
+      tokensPerSecond: number | null;
+      promptTokensPerSecond: number | null;
+      ttftMs: number | null;
+    },
+  ): void {
+    const rec = this.byServer.get(serverId);
+    if (!rec) return;
+    const elapsedMs = Date.now() - rec.startMs;
+    rec.state = {
+      ...rec.state,
       stage: "done",
       finishedAt: new Date().toISOString(),
       elapsedMs,
@@ -48,27 +53,34 @@ class GenerationTracker {
     };
   }
 
-  fail(error: string): void {
-    if (!this.state) return;
-    this.state = {
-      ...this.state,
+  fail(serverId: string, error: string): void {
+    const rec = this.byServer.get(serverId);
+    if (!rec) return;
+    rec.state = {
+      ...rec.state,
       stage: "error",
       finishedAt: new Date().toISOString(),
-      elapsedMs: Date.now() - this.startMs,
+      elapsedMs: Date.now() - rec.startMs,
       error: error.slice(0, 500),
     };
   }
 
-  clear(): void {
-    this.state = null;
+  clear(serverId?: string): void {
+    if (serverId) {
+      this.byServer.delete(serverId);
+      return;
+    }
+    this.byServer.clear();
   }
 
-  get current(): GenerationState | null {
-    if (!this.state) return null;
-    if (this.state.stage === "generating") {
-      return { ...this.state, elapsedMs: Date.now() - this.startMs };
+  /** Live or most recent generation for one server. */
+  current(serverId: string): GenerationState | null {
+    const rec = this.byServer.get(serverId);
+    if (!rec) return null;
+    if (rec.state.stage === "generating") {
+      return { ...rec.state, elapsedMs: Date.now() - rec.startMs };
     }
-    return this.state;
+    return rec.state;
   }
 }
 
