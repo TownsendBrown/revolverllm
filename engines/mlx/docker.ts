@@ -1,4 +1,4 @@
-/** mlx_lm.server listens on this port; native spawn overrides with hostPort. */
+/** revolver_mlx_server listens on this port; native spawn overrides with hostPort. */
 export const MLX_CONTAINER_PORT = 8080;
 
 export const MLX_ENTRYPOINT_FILE = "mlx-entrypoint.sh";

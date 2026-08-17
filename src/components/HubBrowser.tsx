@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { defaultHubPickedFiles, mergeWithCompanions } from "../../shared/hubDownloadFiles";
 import {
   api,
   type DownloadJob,
@@ -50,16 +51,7 @@ function fileGroup(path: string): FileGroup {
 }
 
 function defaultPickedFiles(list: HubRepoFile[]): Set<string> {
-  const gguf = list.filter((f) => f.path.endsWith(".gguf"));
-  if (gguf.length === 0) {
-    return new Set(list.slice(0, 5).map((f) => f.path));
-  }
-  const prefer =
-    gguf.find((f) => /Q4_K_M/i.test(f.path)) ??
-    gguf.find((f) => /Q5_K_M/i.test(f.path)) ??
-    gguf.find((f) => /Q4_K_S/i.test(f.path));
-  if (prefer) return new Set([prefer.path]);
-  return new Set(gguf.map((f) => f.path));
+  return new Set(defaultHubPickedFiles(list));
 }
 
 function weightFiles(list: HubRepoFile[]): HubRepoFile[] {
@@ -155,7 +147,8 @@ export default function HubBrowser({ compact, onDownloadComplete }: Props) {
   };
 
   const selectAllWeights = () => {
-    setPickedFiles(new Set(weightFiles(files).map((f) => f.path)));
+    const weights = weightFiles(files).map((f) => f.path);
+    setPickedFiles(new Set(mergeWithCompanions(files.map((f) => f.path), weights)));
   };
 
   const selectNone = () => {

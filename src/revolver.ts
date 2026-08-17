@@ -50,6 +50,9 @@ export type {
   HubSearchSort,
   DownloadJob,
   StartModelDownloadRequest,
+  RuntimeId,
+  RuntimeInstallJob,
+  RuntimeStatus,
 } from "../shared/types";
 
 export const api: RevolverApi =

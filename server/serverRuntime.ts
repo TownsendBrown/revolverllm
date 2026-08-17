@@ -10,7 +10,7 @@ import {
   restartServerContainer,
   stopServerContainer,
 } from "./containerUtils";
-import { hostAgentCall, isMetalBackend, metalEnabled } from "./hostAgent";
+import { hostAgentCall, usesMetalHostAgent } from "./hostAgent";
 import { getNativeSupervisor } from "./nativeSupervisor";
 import { probeNativeRuntime } from "./llamaServerBin";
 import { probeMlxRuntime } from "./mlxServerBin";
@@ -35,7 +35,7 @@ function assertNativeAllowed(def: ServerDefinition): void {
   if (def.engine === "mlx") {
     const mlx = probeMlxRuntime();
     if (!mlx.python) {
-      throw new Error(mlx.error ?? "mlx-lm not found");
+      throw new Error(mlx.error ?? "mlx-engine runtime not found");
     }
     return;
   }
@@ -46,12 +46,7 @@ function assertNativeAllowed(def: ServerDefinition): void {
 }
 
 export async function ensureServerRuntime(def: ServerDefinition): Promise<void> {
-  if (isMetalBackend(def)) {
-    if (!metalEnabled()) {
-      throw new Error(
-        "Metal backend requires host agent — start mac/scripts/run-host-agent.sh and set REVOLVER_LLAMA_SOCKET",
-      );
-    }
+  if (usesMetalHostAgent(def)) {
     await hostAgentCall("ensure", { serverId: def.id, hostPort: def.hostPort }, HOST_AGENT_FAST_MS);
     return;
   }
@@ -68,7 +63,7 @@ export async function ensureServerRuntime(def: ServerDefinition): Promise<void> 
 }
 
 export async function restartServerRuntime(def: ServerDefinition): Promise<void> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     await hostAgentCall("restart", { serverId: def.id, hostPort: def.hostPort }, HOST_AGENT_SLOW_MS);
     return;
   }
@@ -81,7 +76,7 @@ export async function restartServerRuntime(def: ServerDefinition): Promise<void>
 }
 
 export async function stopServerRuntime(def: ServerDefinition): Promise<void> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     await hostAgentCall("stop", { serverId: def.id }, HOST_AGENT_FAST_MS);
     return;
   }
@@ -93,7 +88,7 @@ export async function stopServerRuntime(def: ServerDefinition): Promise<void> {
 }
 
 export async function inspectServerStatus(def: ServerDefinition): Promise<string> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     const inspect = await hostAgentCall<ServerInspect>(
       "inspect",
       { serverId: def.id },
@@ -109,7 +104,7 @@ export async function inspectServerStatus(def: ServerDefinition): Promise<string
 }
 
 export async function inspectServerPid(def: ServerDefinition): Promise<number | null> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     try {
       const inspect = await hostAgentCall<ServerInspect>(
         "inspect",
@@ -131,7 +126,7 @@ export async function fetchServerLogs(
   def: ServerDefinition,
   opts?: { tail?: number; since?: string | null },
 ): Promise<string[]> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     const lines = await hostAgentCall<string[]>(
       "logs",
       {
@@ -149,7 +144,7 @@ export async function fetchServerLogs(
 }
 
 export async function getServerStartedAt(def: ServerDefinition): Promise<string | null> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     const inspect = await hostAgentCall<ServerInspect>(
       "inspect",
       { serverId: def.id },
@@ -164,7 +159,7 @@ export async function getServerStartedAt(def: ServerDefinition): Promise<string 
 }
 
 export async function removeServerRuntime(def: ServerDefinition): Promise<void> {
-  if (isMetalBackend(def)) {
+  if (usesMetalHostAgent(def)) {
     await hostAgentCall("stop", { serverId: def.id }, HOST_AGENT_FAST_MS).catch(() => {});
     return;
   }

@@ -2515,6 +2515,70 @@ h4 { margin: 12px 0 6px; font-size: 13px; color: var(--text-muted); font-weight:
   opacity: 0.75;
 }
 
+.runtime-setup {
+  margin: 8px 12px 0;
+}
+
+.runtime-setup-lead {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+}
+
+.runtime-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  padding: 0 0 12px;
+}
+
+.runtime-setup-card {
+  border: 2px solid;
+  border-color: var(--border-light) var(--border-dark) var(--border-dark) var(--border-light);
+  padding: 12px;
+  background: var(--bg-panel);
+}
+
+.runtime-setup-card h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.runtime-progress {
+  margin-top: 8px;
+  background: var(--bg-input);
+  border: 1px inset var(--border-mid);
+  height: 22px;
+  position: relative;
+  overflow: hidden;
+}
+
+.runtime-progress-bar {
+  height: 100%;
+  background: var(--accent, #316ac5);
+  transition: width 0.2s ease;
+}
+
+.runtime-progress span {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.runtime-setup-error {
+  margin: 8px 0 0;
+  color: var(--error-text);
+  font-size: 11px;
+}
+
+.runtime-setup-ok {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .banner.warn {
   margin: 0;
   padding: 8px 12px;

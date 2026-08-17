@@ -65,10 +65,12 @@ function initialWizardRuntime(opts: {
   return "docker";
 }
 
-function availableBackends(macMetal: boolean, dockerGpu: boolean) {
+function availableBackends(hostOs: string, macMetal: boolean, dockerGpu: boolean) {
+  // macOS has no CUDA / ROCm / Vulkan runtime — Metal or CPU only.
+  if (hostOs === "darwin") return BACKENDS.filter((b) => b.id === "metal" || b.id === "cpu");
   if (macMetal && !dockerGpu) return BACKENDS.filter((b) => !DOCKER_GPU_BACKENDS.has(b.id));
   if (dockerGpu) return BACKENDS.filter((b) => b.id !== "metal");
-  return BACKENDS;
+  return BACKENDS.filter((b) => b.id !== "metal");
 }
 
 function defaultWizardBackend(
@@ -231,9 +233,13 @@ export default function ServerPanel({
   const logRef = useRef<HTMLPreElement>(null);
   const serverLogRef = useRef<HTMLPreElement>(null);
 
+  // On macOS the native supervisor spawns llama-server / MLX with Metal
+  // directly, so Metal is available with or without the host agent.
+  const metalHost = macMetal || hostOs === "darwin";
+
   const wizardBackends = useMemo(
-    () => availableBackends(macMetal, dockerGpu),
-    [macMetal, dockerGpu],
+    () => availableBackends(hostOs, macMetal, dockerGpu),
+    [hostOs, macMetal, dockerGpu],
   );
 
   const compatibleGpus = useMemo(
@@ -252,8 +258,8 @@ export default function ServerPanel({
   );
 
   const recBackend = useMemo(
-    () => recommendedWizardBackend(macMetal, dockerGpu, gpu),
-    [macMetal, dockerGpu, gpu],
+    () => recommendedWizardBackend(metalHost, dockerGpu, gpu),
+    [metalHost, dockerGpu, gpu],
   );
 
   const refreshServers = useCallback(async () => {
@@ -280,11 +286,14 @@ export default function ServerPanel({
         setMlxAvailable(p.mlx);
         setMlxError(p.mlxError);
         setHostOs(p.os);
-        const next = initialWizardRuntime({
-          defaultRuntime: p.defaultRuntime,
-          native: p.native,
-          docker: p.docker,
-        });
+        const next =
+          p.os === "darwin"
+            ? "native"
+            : initialWizardRuntime({
+                defaultRuntime: p.defaultRuntime,
+                native: p.native,
+                docker: p.docker,
+              });
         setDefaultRuntime(next);
         setRuntime(next);
       })
@@ -293,16 +302,16 @@ export default function ServerPanel({
   }, [configVersion, refreshServers, onError]);
 
   useEffect(() => {
-    if (!macMetal || dockerGpu || !DOCKER_GPU_BACKENDS.has(backend)) return;
+    if (!metalHost || dockerGpu || !DOCKER_GPU_BACKENDS.has(backend)) return;
     setBackend("metal");
-  }, [macMetal, dockerGpu, backend]);
+  }, [metalHost, dockerGpu, backend]);
 
   useEffect(() => {
     const err = validateBackendDevices(backend, gpu?.devices ?? []);
     if (!err) return;
-    const rec = recommendedWizardBackend(macMetal, dockerGpu, gpu);
+    const rec = recommendedWizardBackend(metalHost, dockerGpu, gpu);
     if (rec !== backend) setBackend(rec);
-  }, [backend, gpu, macMetal, dockerGpu]);
+  }, [backend, gpu, metalHost, dockerGpu]);
 
   useEffect(() => {
     if (backend === "cpu" || backend === "metal") {
@@ -420,8 +429,8 @@ export default function ServerPanel({
 
   const resetWizard = () => {
     setWizardStep("backend");
-    setBackend(defaultWizardBackend(macMetal, dockerGpu, gpu));
-    const rec = recommendedWizardBackend(macMetal, dockerGpu, gpu);
+    setBackend(defaultWizardBackend(metalHost, dockerGpu, gpu));
+    const rec = recommendedWizardBackend(metalHost, dockerGpu, gpu);
     const pool = devicesForBackend(gpu?.devices ?? [], rec);
     setGpuDevices(pool[0] != null ? [pool[0].index] : []);
     setGpuMode("single");
@@ -625,7 +634,7 @@ export default function ServerPanel({
                   );
                 })}
               </div>
-              {backend !== "metal" && (
+              {backend !== "metal" && hostOs !== "darwin" && (
                 <>
                   <p className="muted" style={{ marginTop: "1.25rem" }}>
                     How to run llama-server
@@ -799,7 +808,7 @@ export default function ServerPanel({
                       <strong>{e.label}</strong>
                       <span>{e.description}</span>
                       {e.id === "mlx" && !mlxAvailable && (
-                        <span className="field-hint warn">{mlxError ?? "mlx-lm not installed in mlx/.venv"}</span>
+                        <span className="field-hint warn">{mlxError ?? "mlx-engine runtime not installed"}</span>
                       )}
                       {e.id === "mlx" && mlxAvailable && (
                         <span className="backend-rec">macOS native</span>
@@ -893,7 +902,7 @@ export default function ServerPanel({
                 <dt>Backend</dt>
                 <dd>{backend.toUpperCase()}</dd>
                 <dt>Runtime</dt>
-                <dd>{engine === "mlx" ? "native mlx_lm.server" : backend === "metal" ? "native (Metal host-agent)" : runtime === "native" ? "native process" : "Docker container"}</dd>
+                <dd>{engine === "mlx" ? "native revolver_mlx_server" : backend === "metal" ? "native (Metal host-agent)" : runtime === "native" ? "native process" : "Docker container"}</dd>
                 <dt>Engine</dt>
                 <dd>{activeEngineInfo?.label ?? engine}</dd>
                 {backend !== "cpu" && (

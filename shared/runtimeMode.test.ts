@@ -36,10 +36,25 @@ function fakeDef(overrides: Partial<ServerDefinition> = {}): ServerDefinition {
 }
 
 describe("resolveServerRuntime", () => {
-  it("maps metal llama.cpp to metal, MLX metal to native", () => {
+  afterEach(() => {
+    delete process.env.REVOLVER_LLAMA_HOST;
+    delete process.env.REVOLVER_LLAMA_SOCKET;
+  });
+
+  it("maps metal llama.cpp to metal when host agent configured, else native", () => {
+    delete process.env.REVOLVER_LLAMA_HOST;
+    delete process.env.REVOLVER_LLAMA_SOCKET;
+    assert.equal(resolveServerRuntime(fakeDef({ backend: "metal", runtime: "docker" })), "native");
+    assert.equal(isNativeRuntime(fakeDef({ backend: "metal" })), true);
+    assert.equal(usesHostModelPaths(fakeDef({ backend: "metal" })), true);
+
+    process.env.REVOLVER_LLAMA_HOST = "127.0.0.1";
     assert.equal(resolveServerRuntime(fakeDef({ backend: "metal", runtime: "docker" })), "metal");
     assert.equal(isNativeRuntime(fakeDef({ backend: "metal" })), false);
-    assert.equal(usesHostModelPaths(fakeDef({ backend: "metal" })), true);
+    delete process.env.REVOLVER_LLAMA_HOST;
+  });
+
+  it("maps MLX metal to native", () => {
     assert.equal(
       resolveServerRuntime(fakeDef({ engine: "mlx", backend: "metal", runtime: "docker" })),
       "native",

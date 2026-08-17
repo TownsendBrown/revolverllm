@@ -13,8 +13,14 @@ const registry = new Map<EngineId, InferenceEngine>([
   [mlxEngine.id, mlxEngine],
 ]);
 
-function mlxAllowedOnThisHost(): boolean {
-  return process.platform === "darwin";
+/**
+ * macOS ships without Docker, so only the natively spawnable engines
+ * (llama.cpp, MLX) are usable there — vLLM images would never start.
+ * MLX in turn only exists on macOS.
+ */
+export function engineAllowedOnThisHost(engine: InferenceEngine): boolean {
+  if (process.platform === "darwin") return engine.capabilities.supportsNative;
+  return engine.id !== "mlx";
 }
 
 export const DEFAULT_ENGINE: EngineId = "llamacpp";
@@ -27,7 +33,7 @@ export function registerEngine(engine: InferenceEngine): void {
 export function enginesForFormat(format: ModelFormat): EngineId[] {
   return [...registry.values()]
     .filter((e) => e.capabilities.formats.includes(format))
-    .filter((e) => e.id !== "mlx" || mlxAllowedOnThisHost())
+    .filter(engineAllowedOnThisHost)
     .map((e) => e.id);
 }
 

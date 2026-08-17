@@ -1,6 +1,7 @@
 import type { EngineInfo } from "../shared/types";
 import {
   DEFAULT_ENGINE,
+  engineAllowedOnThisHost,
   enginesForFormat,
   enginesForModel,
   getEngine,
@@ -10,6 +11,7 @@ import {
 
 export {
   DEFAULT_ENGINE,
+  engineAllowedOnThisHost,
   enginesForFormat,
   enginesForModel,
   getEngine,
@@ -29,7 +31,7 @@ export type {
 
 export function engineInfos(): EngineInfo[] {
   return listEngines()
-    .filter((e) => e.id !== "mlx" || process.platform === "darwin")
+    .filter(engineAllowedOnThisHost)
     .map((e) => ({
       id: e.id,
       label: e.label,

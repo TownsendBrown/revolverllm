@@ -11,15 +11,22 @@ export function defaultRuntimeMode(): ServerRuntimeMode {
   return process.env.REVOLVER_RUNTIME === "native" ? "native" : "docker";
 }
 
+/** True when macOS Metal host-agent is configured (Compose / start:macos). */
+export function metalHostAgentConfigured(): boolean {
+  return Boolean(process.env.REVOLVER_LLAMA_HOST || process.env.REVOLVER_LLAMA_SOCKET);
+}
+
 /**
- * Metal always uses the macOS host-agent. Otherwise honor `def.runtime`,
- * then `REVOLVER_RUNTIME`, then docker.
+ * Metal llama.cpp uses the macOS host-agent when configured. Otherwise native
+ * supervisor spawns llama-server directly (packaged Electron DMG path).
  */
 export function resolveServerRuntime(
   def: Pick<ServerDefinition, "backend" | "runtime" | "engine">,
 ): ResolvedRuntime {
   if (def.engine === "mlx") return "native";
-  if (def.backend === "metal") return "metal";
+  if (def.backend === "metal") {
+    return metalHostAgentConfigured() ? "metal" : "native";
+  }
   if (def.runtime === "native" || def.runtime === "docker") return def.runtime;
   return "docker";
 }

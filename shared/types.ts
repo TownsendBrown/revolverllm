@@ -410,7 +410,7 @@ export interface PlatformCapabilities {
   native: boolean;
   nativeError?: string;
   llamaServerBin?: string | null;
-  /** True when mlx-lm is importable on this Mac (native mlx_lm.server). */
+  /** True when mlx-engine runtime is importable on this Mac (native revolver_mlx_server). */
   mlx: boolean;
   mlxError?: string;
   mlxPython?: string | null;
@@ -536,6 +536,63 @@ export interface StartModelDownloadRequest {
   files?: string[];
 }
 
+export type RuntimeId = "llamacpp" | "mlx";
+
+export type RuntimeInstallPhase =
+  | "queued"
+  | "download"
+  | "extract"
+  | "sign"
+  | "verify"
+  | "venv"
+  | "pip"
+  | "done";
+
+export interface RuntimeCatalogEntry {
+  id: RuntimeId;
+  label: string;
+  sizeBytes: number;
+  tag?: string;
+  pythonVersion?: string;
+  mlxVersion?: string;
+  mlxEngineCommit?: string;
+  minMacos?: string;
+}
+
+export interface RuntimeCatalog {
+  llamacpp: RuntimeCatalogEntry;
+  mlx: RuntimeCatalogEntry;
+}
+
+export interface RuntimeStatus {
+  catalog: RuntimeCatalog;
+  llamacpp: {
+    installed: boolean;
+    path: string | null;
+    tag: string | null;
+  };
+  mlx: {
+    installed: boolean;
+    python: string | null;
+    runtimePath: string | null;
+  };
+  platform: NodeJS.Platform;
+}
+
+export interface RuntimeInstallJob {
+  id: string;
+  runtimeId: RuntimeId;
+  status: DownloadJobStatus;
+  phase: RuntimeInstallPhase;
+  progress: number;
+  bytesDone: number;
+  bytesTotal: number | null;
+  error: string | null;
+  installPath: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ChatConversation {
   id: string;
   title: string;
@@ -630,6 +687,11 @@ export interface RevolverApi {
   listDownloads(): Promise<DownloadJob[]>;
   getDownload(jobId: string): Promise<DownloadJob>;
   cancelDownload(jobId: string): Promise<DownloadJob>;
+  getRuntimesStatus(): Promise<RuntimeStatus>;
+  installRuntime(runtimeId: RuntimeId): Promise<RuntimeInstallJob>;
+  listRuntimeInstalls(): Promise<RuntimeInstallJob[]>;
+  getRuntimeInstall(jobId: string): Promise<RuntimeInstallJob>;
+  cancelRuntimeInstall(jobId: string): Promise<RuntimeInstallJob>;
   getGpu(): Promise<GpuInfo>;
   getPlatform(): Promise<PlatformCapabilities>;
   getMonitor(): Promise<MonitorSnapshot>;

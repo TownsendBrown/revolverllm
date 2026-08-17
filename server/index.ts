@@ -49,6 +49,9 @@ const routes: Array<{ method: "get" | "post"; path: string; name: HandlerName }>
   { method: "get", path: "/api/hub/files", name: "listHubRepoFiles" },
   { method: "post", path: "/api/downloads", name: "startModelDownload" },
   { method: "get", path: "/api/downloads", name: "listDownloads" },
+  { method: "get", path: "/api/runtimes/status", name: "getRuntimesStatus" },
+  { method: "post", path: "/api/runtimes/install", name: "installRuntime" },
+  { method: "get", path: "/api/runtimes/installs", name: "listRuntimeInstalls" },
   { method: "get", path: "/api/gpu", name: "getGpu" },
   { method: "get", path: "/api/platform", name: "getPlatform" },
   { method: "get", path: "/api/monitor", name: "getMonitor" },
@@ -92,6 +95,13 @@ for (const route of routes) {
         result = await fn(String((req.body ?? {}).token ?? ""));
       } else if (route.method === "get") {
         result = await fn();
+      } else if (route.name === "installRuntime") {
+        const runtimeId = (req.body ?? {}).runtimeId;
+        if (runtimeId !== "llamacpp" && runtimeId !== "mlx") {
+          res.status(400).json({ error: "runtimeId must be llamacpp or mlx" });
+          return;
+        }
+        result = await fn(runtimeId);
       } else {
         result = await fn(req.body ?? {});
       }
@@ -116,6 +126,24 @@ app.get("/api/downloads/:id", async (req, res) => {
 app.post("/api/downloads/:id/cancel", async (req, res) => {
   try {
     res.json(await handlers.cancelDownload(req.params.id));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/runtimes/installs/:id", async (req, res) => {
+  try {
+    res.json(await handlers.getRuntimeInstall(req.params.id));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+  }
+});
+
+app.post("/api/runtimes/installs/:id/cancel", async (req, res) => {
+  try {
+    res.json(await handlers.cancelRuntimeInstall(req.params.id));
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });

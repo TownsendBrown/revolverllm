@@ -1,4 +1,5 @@
 import type { HubFormatFilter } from "../shared/types";
+import { mergeWithCompanions } from "../shared/hubDownloadFiles";
 import { getHfToken } from "../electron/lib/secrets";
 
 const REPO_ID = /^[\w.-]+\/[\w.-]+$/;
@@ -171,9 +172,20 @@ export async function listRepoFiles(repoId: string, revision = "main"): Promise<
 
 export async function probeRepoSize(repoId: string, revision: string, files: string[] | null): Promise<number | null> {
   const entries = await listRepoFiles(repoId, revision);
-  const picked = files?.length
-    ? entries.filter((e) => files.some((f) => e.path === f || e.path.endsWith(`/${f}`)))
-    : entries.filter((e) => e.path.endsWith(".gguf") || e.path.endsWith(".safetensors") || e.path === "config.json");
+  const paths = entries.map((e) => e.path);
+  const wanted = new Set(
+    files?.length
+      ? mergeWithCompanions(
+          paths,
+          entries
+            .filter((e) => files.some((f) => e.path === f || e.path.endsWith(`/${f}`)))
+            .map((e) => e.path),
+        )
+      : entries
+          .filter((e) => e.path.endsWith(".gguf") || e.path.endsWith(".safetensors") || e.path === "config.json")
+          .map((e) => e.path),
+  );
+  const picked = entries.filter((e) => wanted.has(e.path));
   const sizes = picked.map((e) => e.size).filter((s): s is number => s != null && s > 0);
   if (!sizes.length) return null;
   return sizes.reduce((a, b) => a + b, 0);

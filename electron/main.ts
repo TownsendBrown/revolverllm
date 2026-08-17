@@ -195,6 +195,22 @@ async function onReady(): Promise<void> {
     "revolver:cancelDownload",
     withIpcError((_e, jobId: string) => handlers.cancelDownload(jobId)),
   );
+  bindHandler("revolver:getRuntimesStatus", () => handlers.getRuntimesStatus());
+  ipcMain.handle(
+    "revolver:installRuntime",
+    withIpcError((_e, runtimeId: import("../shared/types").RuntimeId) =>
+      handlers.installRuntime(runtimeId),
+    ),
+  );
+  bindHandler("revolver:listRuntimeInstalls", () => handlers.listRuntimeInstalls());
+  ipcMain.handle(
+    "revolver:getRuntimeInstall",
+    withIpcError((_e, jobId: string) => handlers.getRuntimeInstall(jobId)),
+  );
+  ipcMain.handle(
+    "revolver:cancelRuntimeInstall",
+    withIpcError((_e, jobId: string) => handlers.cancelRuntimeInstall(jobId)),
+  );
   bindHandler("revolver:getGpu", () => handlers.getGpu());
   bindHandler("revolver:getPlatform", () => handlers.getPlatform());
   bindHandler("revolver:getMonitor", () => handlers.getMonitor());

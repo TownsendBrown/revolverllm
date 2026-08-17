@@ -1,5 +1,5 @@
 import { spawn, execFile, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { promisify } from "util";
 import { getDataDir } from "../electron/lib/config";
@@ -12,6 +12,7 @@ import {
   llamaEnvFileName,
 } from "../engines/llamacpp/docker";
 import { mlxEnvFileName } from "../engines/mlx/docker";
+import { mlxTokenizerPresent } from "../shared/hubDownloadFiles";
 
 const execFileAsync = promisify(execFile);
 
@@ -160,7 +161,7 @@ export class NativeSupervisor {
       rec.status = "idle";
       appendLog(
         rec,
-        `${isMlx ? "mlx_lm.server" : "llama-server"}: no model configured — idle (load via manager)`,
+        `${isMlx ? "revolver_mlx_server" : "llama-server"}: no model configured — idle (load via manager)`,
       );
       return this.toInspect(rec);
     }
@@ -168,8 +169,22 @@ export class NativeSupervisor {
     const hfRepo = !model.startsWith("/") && model.includes("/");
     if (!modelOnDisk && !(isMlx && hfRepo)) {
       rec.status = "crashed";
-      appendLog(rec, `${isMlx ? "mlx_lm.server" : "llama-server"}: model not found: ${model}`);
+      appendLog(rec, `${isMlx ? "revolver_mlx_server" : "llama-server"}: model not found: ${model}`);
       return this.toInspect(rec);
+    }
+    if (isMlx && modelOnDisk) {
+      try {
+        if (statSync(model).isDirectory() && !mlxTokenizerPresent(readdirSync(model))) {
+          rec.status = "crashed";
+          appendLog(
+            rec,
+            `revolver_mlx_server: missing tokenizer.json in ${model} — re-download the Hugging Face repo (tokenizer sidecars required)`,
+          );
+          return this.toInspect(rec);
+        }
+      } catch {
+        /* spawn and let the server report */
+      }
     }
 
     let child: ChildProcess;
@@ -184,7 +199,7 @@ export class NativeSupervisor {
         "-W",
         "ignore::UserWarning",
         "-m",
-        "mlx_lm.server",
+        "revolver_mlx_server",
         "--model",
         model,
         "--host",
@@ -192,8 +207,7 @@ export class NativeSupervisor {
         "--port",
         String(hostPort),
       ];
-      if (fileEnv.ADAPTER_PATH) args.push("--adapter-path", fileEnv.ADAPTER_PATH);
-      appendLog(rec, `[native] mlx_lm.server ${mlx.python} --model ${model} --port ${hostPort}`);
+      appendLog(rec, `[native] revolver_mlx_server ${mlx.python} --model ${model} --port ${hostPort}`);
       child = spawn(mlx.python, args, {
         env: {
           ...process.env,
@@ -256,7 +270,7 @@ export class NativeSupervisor {
           rec.status = "crashed";
           appendLog(
             rec,
-            `[native] ${isMlx ? "mlx_lm.server" : "llama-server"} exited code=${code ?? "?"} signal=${signal ?? ""}`,
+            `[native] ${isMlx ? "revolver_mlx_server" : "llama-server"} exited code=${code ?? "?"} signal=${signal ?? ""}`,
           );
         }
       }

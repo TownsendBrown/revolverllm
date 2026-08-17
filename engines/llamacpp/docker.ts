@@ -97,6 +97,12 @@ if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
   exec sleep infinity
 fi
 
+if [ -z "$GPU_LAYERS" ] || [ "$GPU_LAYERS" = "0" ]; then
+  if [ "$BACKEND" = "metal" ]; then
+    GPU_LAYERS="-1"
+  fi
+fi
+
 set -- --host "$HOST" --port "$PORT" --model "$MODEL"
 [ -n "$CTX" ] && set -- "$@" --ctx-size "$CTX"
 [ -n "$GPU_LAYERS" ] && set -- "$@" --n-gpu-layers "$GPU_LAYERS"

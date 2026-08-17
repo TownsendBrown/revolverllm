@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "llamacpp": {
+    "repo": "ggml-org/llama.cpp",
+    "tag": "b10453",
+    "asset": "llama-b10453-bin-macos-arm64.tar.gz",
+    "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/llama-b10453-bin-macos-arm64.tar.gz",
+    "sha256": "f1531b1c520f8b473d83352c5eec2f4f43bd0a54f9ca1366a6f202211cfbc098",
+    "sizeBytes": 11072482,
+    "unpackDir": "llama-b10453"
+  },
+  "mlxRuntime": {
+    "version": "1.0.0",
+    "asset": "revolver-mlx-runtime-1.0.0-mac14-arm64.tar.gz",
+    "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/revolver-mlx-runtime-1.0.0-mac14-arm64.tar.gz",
+    "sha256": "64be8502b53f5bf08d61b64829d43183ad2b7fbeeb3932d5d968a07aab2a0844",
+    "sizeBytes": 425567992,
+    "unpackDir": ".",
+    "minMacos": "14.0",
+    "mlxEngineCommit": "ec2f585ae8a48cf9ffe09baf469d76be317db288",
+    "pythonVersion": "3.11.15"
+  }
+}

@@ -13,7 +13,7 @@ import { mlxMemoryEstimator } from "./memory";
 export const mlxEngine: InferenceEngine = {
   id: "mlx",
   label: "MLX",
-  description: "Apple Silicon via mlx-lm (safetensors / MLX quants). Native macOS only.",
+  description: "Apple Silicon via mlx-engine (safetensors / MLX quants). Native macOS only.",
   capabilities: MLX_CAPABILITIES,
   configFields: MLX_CONFIG_FIELDS,
 
@@ -56,8 +56,8 @@ export const mlxEngine: InferenceEngine = {
           message: "MLX model not found — check MODEL path",
         },
         {
-          match: "No module named 'mlx",
-          message: "mlx-lm not installed — create mlx/.venv and pip install mlx mlx-lm",
+          match: "Couldn't instantiate the backend tokenizer",
+          message: "Tokenizer files missing — re-download the model (include tokenizer.json)",
         },
       ],
       timeoutMs: 300_000,

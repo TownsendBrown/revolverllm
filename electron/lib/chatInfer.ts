@@ -117,11 +117,15 @@ function pickReasoning(
   );
 }
 
-function parseSseChunk(line: string): ChunkParse | null {
+/** OpenAI SSE terminator. Must stop here — do not wait for TCP close. */
+const SSE_DONE = "DONE" as const;
+
+export function parseSseChunk(line: string): ChunkParse | typeof SSE_DONE | null {
   const trimmed = line.trim();
   if (!trimmed.startsWith("data:")) return null;
   const payload = trimmed.slice(5).trim();
-  if (!payload || payload === "[DONE]") return null;
+  if (!payload) return null;
+  if (payload === "[DONE]") return SSE_DONE;
   try {
     const json = JSON.parse(payload) as {
       choices?: Array<{
@@ -217,7 +221,7 @@ function buildMetrics(opts: {
   };
 }
 
-async function readSseStream(
+export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onDelta: (delta: StreamDelta) => void,
   startMs: number,
@@ -229,14 +233,16 @@ async function readSseStream(
   let buffer = "";
   let content = "";
   let reasoning = "";
+  let sawDone = false;
 
   let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
   let timings: LlamaTimings | undefined;
   let firstTokenAt: number | null = null;
 
-  const consume = (line: string) => {
+  const consume = (line: string): boolean => {
     const parsed = parseSseChunk(line);
-    if (!parsed) return;
+    if (parsed === SSE_DONE) return true;
+    if (!parsed) return false;
     if (parsed.usage) usage = parsed.usage;
     if (parsed.timings) timings = parsed.timings;
     const chunk: StreamDelta = {};
@@ -253,17 +259,23 @@ async function readSseStream(
       chunk.content = parsed.content;
     }
     if (chunk.content != null || chunk.reasoning != null) onDelta(chunk);
+    return false;
   };
 
   try {
-    while (true) {
+    while (!sawDone) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
-      for (const line of lines) consume(line);
+      for (const line of lines) {
+        if (consume(line)) {
+          sawDone = true;
+          break;
+        }
+      }
     }
   } finally {
     try {
@@ -272,7 +284,7 @@ async function readSseStream(
       /* ignore */
     }
   }
-  if (buffer.trim()) consume(buffer);
+  if (!sawDone && buffer.trim()) consume(buffer);
 
   // Fallback: unparsed thoughts/channels inline in content (reasoning_format=none, etc.).
   if (collectReasoning && (!reasoning || /<\|channel\|>/i.test(content))) {

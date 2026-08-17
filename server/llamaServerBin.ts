@@ -3,6 +3,7 @@ import { delimiter, join } from "path";
 import { homedir } from "os";
 import { inComposeBackend } from "../shared/runtimeMode";
 import { resolveInstalledBackendPack, type NativeBackendResolve } from "./nativeBackends";
+import { installedLlamaServerBin } from "./runtimeInstaller";
 
 export interface LlamaServerResolve {
   bin: string | null;
@@ -76,7 +77,7 @@ export interface ResolveLlamaServerOpts {
 
 function missingBinError(): string {
   if (process.platform === "darwin") {
-    return "llama-server not found. On macOS: brew install llama.cpp — or mac/scripts/install-llama-server.sh";
+    return "llama.cpp runtime not installed — install it from Setup runtimes (downloads the Metal build from GitHub releases).";
   }
   return "llama-server not found. Build a CUDA pack: ./backends/build.sh sm70 — then npm run install:llama-server. Or set LLAMA_SERVER_BIN.";
 }
@@ -103,7 +104,9 @@ export function resolveLlamaServerBin(
   }
 
   const home = opts?.home ?? homedir();
+  const staged = platform === "darwin" ? installedLlamaServerBin() : null;
   const candidates = [
+    ...(staged ? [staged] : []),
     ...pathDirs().flatMap((dir) => [join(dir, "llama-server"), join(dir, "llama-server-cuda")]),
     "/usr/local/bin/llama-server",
     "/opt/homebrew/bin/llama-server",

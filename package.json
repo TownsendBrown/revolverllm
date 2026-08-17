@@ -51,6 +51,12 @@
       "node_modules/bindings/**",
       "node_modules/file-uri-to-path/**"
     ],
+    "extraResources": [
+      {
+        "from": "runtimes/catalog.json",
+        "to": "runtimes/catalog.json"
+      }
+    ],
     "asar": true,
     "asarUnpack": [
       "**/*.node"

@@ -1,10 +1,11 @@
 import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statfsSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statfsSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { loadConfig } from "../electron/lib/config";
 import { getDataDir } from "../electron/lib/config";
 import { loadSettings } from "../electron/lib/settings";
 import type { DownloadJob, DownloadJobStatus, StartModelDownloadRequest } from "../shared/types";
+import { mergeWithCompanions } from "../shared/hubDownloadFiles";
 import { downloadFile, listRepoFiles, probeRepoSize } from "./hfHub";
 
 const jobs = new Map<string, DownloadJob>();
@@ -135,7 +136,16 @@ async function runJob(id: string): Promise<void> {
     let files = allFiles;
     if (job.files?.length) {
       const set = new Set(job.files);
-      files = allFiles.filter((f) => set.has(f.path) || [...set].some((s) => f.path.endsWith(`/${s}`)));
+      const picked = allFiles.filter(
+        (f) => set.has(f.path) || [...set].some((s) => f.path.endsWith(`/${s}`)),
+      );
+      const merged = new Set(
+        mergeWithCompanions(
+          allFiles.map((f) => f.path),
+          picked.map((f) => f.path),
+        ),
+      );
+      files = allFiles.filter((f) => merged.has(f.path));
     } else {
       files = allFiles.filter(
         (f) =>
@@ -143,7 +153,8 @@ async function runJob(id: string): Promise<void> {
           f.path.endsWith(".safetensors") ||
           f.path.endsWith(".json") ||
           f.path.endsWith(".model") ||
-          f.path.endsWith(".txt"),
+          f.path.endsWith(".txt") ||
+          f.path.endsWith(".jinja"),
       );
       if (!files.some((f) => f.path.endsWith(".gguf") || f.path.endsWith(".safetensors"))) {
         files = allFiles.filter((f) => !f.path.includes("/") || f.path.split("/").length <= 2);
@@ -159,8 +170,14 @@ async function runJob(id: string): Promise<void> {
       if (ac.signal.aborted) throw new DOMException("Cancelled", "AbortError");
       const destPath = join(job.localPath!, file.path);
       if (existsSync(destPath) && file.size != null) {
-        doneBytes += file.size;
-        continue;
+        try {
+          if (statSync(destPath).size === file.size) {
+            doneBytes += file.size;
+            continue;
+          }
+        } catch {
+          /* re-download */
+        }
       }
       await downloadFile({
         repoId: job.repoId,

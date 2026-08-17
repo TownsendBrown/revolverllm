@@ -74,7 +74,7 @@ const MLX_LOAD_STEPS: LoadStep[] = [
   {
     id: "spawn",
     label: "Starting MLX server",
-    test: (t) => /mlx_lm\.server|\[native\] mlx_lm\.server/.test(t),
+    test: (t) => /revolver_mlx_server|\[native\] revolver_mlx_server/.test(t),
   },
   {
     id: "weights",
@@ -160,7 +160,7 @@ export function parseLoadProgress(
 }
 
 const IMPORTANT =
-  /\[revolver\]|model loaded|server is listening|print_timing|eval time|tokens per second|\btg\s*=\s*[\d.]+\s*t\/s|operator\(\): cleaning|exited|error|fatal|Starting to load model|Loading safetensors|Application startup complete|Starting vLLM API server|Starting httpd at|mlx_lm\.server/i;
+  /\[revolver\]|model loaded|server is listening|print_timing|eval time|tokens per second|\btg\s*=\s*[\d.]+\s*t\/s|operator\(\): cleaning|exited|error|fatal|Starting to load model|Loading safetensors|Application startup complete|Starting vLLM API server|Starting httpd at|revolver_mlx_server|listening on http/i;
 
 export function filterLogLines(lines: string[], verbose: boolean): string[] {
   if (verbose) return lines;

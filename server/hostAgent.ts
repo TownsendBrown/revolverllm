@@ -1,8 +1,15 @@
 import { connect, type Socket } from "net";
+import { resolveServerRuntime } from "../shared/runtimeMode";
 import type { ServerDefinition } from "../shared/types";
 
-export function isMetalBackend(def: Pick<ServerDefinition, "backend" | "engine">): boolean {
-  return def.backend === "metal" && def.engine !== "mlx";
+/**
+ * True when this Metal server is driven by the macOS host agent. Without an
+ * agent (packaged Electron DMG) Metal runs through the native supervisor.
+ */
+export function usesMetalHostAgent(
+  def: Pick<ServerDefinition, "backend" | "runtime" | "engine">,
+): boolean {
+  return resolveServerRuntime(def) === "metal";
 }
 
 function hostAgentEndpoint(): { host: string; port: number; socketPath?: string } {

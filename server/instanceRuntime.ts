@@ -18,7 +18,7 @@ import {
   restartServerRuntime,
   stopServerRuntime,
 } from "./serverRuntime";
-import { isMetalBackend } from "./hostAgent";
+import { usesMetalHostAgent } from "./hostAgent";
 import { isNativeRuntime } from "../shared/runtimeMode";
 import { claimGpus, releaseGpus } from "./gpuClaims";
 import { getGpuInfoAsync } from "./platformGpu";
@@ -254,7 +254,7 @@ export class InstanceRuntime {
 
   /** Host-process liveness via PID. HTTP /health is only for load + chat (ensureReady). */
   private async syncHostProcessHealth(): Promise<void> {
-    if ((!isMetalBackend(this.def) && !isNativeRuntime(this.def)) || !this.state?.running) return;
+    if ((!usesMetalHostAgent(this.def) && !isNativeRuntime(this.def)) || !this.state?.running) return;
     const pid = await inspectServerPid(this.def);
     if (pid != null && processAlive(pid)) return;
     this.state = null;
@@ -308,10 +308,10 @@ export class InstanceRuntime {
       },
     });
     for (const line of plan.logLines) this.logs.append(line);
-    if (isMetalBackend(def)) {
+    if (usesMetalHostAgent(def)) {
       this.logs.append(`[revolver] metal host-agent → port ${def.hostPort}`);
     } else if (isNativeRuntime(def)) {
-      const kind = def.engine === "mlx" ? "native mlx_lm.server" : "native llama-server";
+      const kind = def.engine === "mlx" ? "native revolver_mlx_server" : "native llama-server";
       this.logs.append(`[revolver] ${kind} → port ${def.hostPort}`);
     }
     if (def.gpuDevices.length) {
@@ -407,7 +407,7 @@ export class InstanceRuntime {
   async adopt(): Promise<void> {
     if (!this.def.modelPath || this.state?.running) return;
 
-    const hostProcess = isMetalBackend(this.def) || isNativeRuntime(this.def);
+    const hostProcess = usesMetalHostAgent(this.def) || isNativeRuntime(this.def);
     if (hostProcess) {
       const base = `http://${this.getHost()}:${this.def.hostPort}`;
       try {

@@ -37,8 +37,15 @@ import {
   listDownloadJobs,
   startDownload,
 } from "./downloadJobs";
+import {
+  cancelRuntimeInstallJob,
+  getRuntimeInstallJob,
+  getRuntimesStatus,
+  listRuntimeInstallJobs,
+  startRuntimeInstall,
+} from "./runtimeInstaller";
 import { assertArtifactRelPath } from "./benchmarkStore";
-import type { SettingsPatch, StartModelDownloadRequest, HubFormatFilter } from "../shared/types";
+import type { SettingsPatch, StartModelDownloadRequest, HubFormatFilter, RuntimeId } from "../shared/types";
 
 type GpuDevices = GpuInfo["devices"];
 
@@ -257,6 +264,15 @@ export const handlers = {
     return job;
   },
   cancelDownload: (jobId: string) => cancelDownloadJob(jobId),
+  getRuntimesStatus: () => getRuntimesStatus(),
+  installRuntime: (runtimeId: RuntimeId) => startRuntimeInstall(runtimeId),
+  listRuntimeInstalls: () => listRuntimeInstallJobs(),
+  getRuntimeInstall: (jobId: string) => {
+    const job = getRuntimeInstallJob(jobId);
+    if (!job) throw new Error("Runtime install job not found");
+    return job;
+  },
+  cancelRuntimeInstall: (jobId: string) => cancelRuntimeInstallJob(jobId),
   getGpu: () => getGpuInfoAsync(),
   getPlatform: async () => {
     const metal = metalEnabled();

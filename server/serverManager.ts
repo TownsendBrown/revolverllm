@@ -160,7 +160,7 @@ export const serverManager = {
       }
       if (engineId === "mlx") {
         const mlx = probeMlxRuntime();
-        if (!mlx.available) throw new Error(mlx.error ?? "mlx-lm is not available");
+        if (!mlx.available) throw new Error(mlx.error ?? "mlx-engine runtime is not available");
       } else {
         const probe = probeNativeRuntime();
         if (!probe.available) throw new Error(probe.error ?? "Native llama-server is not available");

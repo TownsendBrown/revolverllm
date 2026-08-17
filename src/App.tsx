@@ -6,6 +6,7 @@ import BenchmarkPanel from "./components/BenchmarkPanel";
 import Logo from "./components/Logo";
 import MonitorPanel from "./components/MonitorPanel";
 import ServerPanel from "./components/ServerPanel";
+import RuntimeSetupPanel from "./components/RuntimeSetupPanel";
 import benchmarkIcon from "../icons/benchmark-icon.v2.svg";
 import configIcon from "../icons/config-icon.v6.svg";
 import chatIcon from "../icons/chat-icon.v1.svg";
@@ -37,6 +38,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [platform, setPlatform] = useState<PlatformCapabilities | null>(null);
+  const [runtimeReady, setRuntimeReady] = useState(true);
   const [pendingChatServerId, setPendingChatServerId] = useState<string | null>(null);
   const consumePendingChatServer = useCallback(() => setPendingChatServerId(null), []);
   const statusEpoch = useRef(0);
@@ -74,6 +76,20 @@ export default function App() {
       setGpu(g);
       applyServerStatus(s, epoch);
       setPlatform(p);
+      // macOS ships no engine binaries: both managed runtimes must be
+      // installed from GitHub releases before anything can load a model.
+      if (p.os !== "darwin") setRuntimeReady(true);
+      else {
+        // A probe that cannot answer means no engine can load a model, so fall
+        // through to setup instead of leaving the app looking ready.
+        try {
+          const rt = await api.getRuntimesStatus();
+          setRuntimeReady(rt.llamacpp.installed && rt.mlx.installed);
+        } catch (e) {
+          setRuntimeReady(false);
+          setError(String(e));
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -130,14 +146,24 @@ export default function App() {
     server: serverIcon,
   };
 
+  // Benchmarks are not shipped on macOS yet.
+  const benchmarksEnabled = platform != null && platform.os !== "darwin";
+  const setupRequired = platform?.os === "darwin" && !runtimeReady;
+
   const nav: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: "Chat", icon: ">" },
     { id: "models", label: "Models", icon: "M" },
-    { id: "benchmarks", label: "Benchmarks", icon: "B" },
+    ...(benchmarksEnabled
+      ? [{ id: "benchmarks" as Tab, label: "Benchmarks", icon: "B" }]
+      : []),
     { id: "server", label: "Server", icon: "#" },
     { id: "config", label: "Config", icon: "*" },
     { id: "monitor", label: "Monitor", icon: "=" },
   ];
+
+  useEffect(() => {
+    if (!benchmarksEnabled && tab === "benchmarks") setTab("chat");
+  }, [benchmarksEnabled, tab]);
 
   const runAction = (fn: () => Promise<unknown> | void) => {
     setMenuOpen(false);
@@ -197,6 +223,7 @@ export default function App() {
                 key={n.id}
                 className={`nav-btn ${tab === n.id ? "active" : ""}${svgIcon ? " nav-btn-icon-fill" : ""}`}
                 onClick={() => setTab(n.id)}
+                disabled={setupRequired}
                 title={n.label}
               >
                 <span className={`nav-icon${svgIcon ? " nav-icon-svg" : ""}`}>
@@ -270,74 +297,86 @@ export default function App() {
 
         {error && <div className="banner error">{error}</div>}
         {dockerWarn && <div className="banner warn">{dockerWarn}</div>}
-
-        {tab === "models" && (
-          <ModelsPanel
-            models={models}
-            platform={platform}
-            onRefresh={refresh}
-            onError={setError}
-          />
-        )}
-
-        {tab === "config" && configDraft && (
-          <ConfigPanel
-            config={config}
-            configDraft={configDraft}
-            setConfigDraft={setConfigDraft}
-            gpu={gpu}
-            platform={platform}
-            onSavePaths={() =>
-              api.setConfig(configDraft).then((c) => {
-                setConfig(c);
-                setConfigVersion((v) => v + 1);
-                void refresh();
-              })
-            }
-            onRefresh={() => {
-              setConfigVersion((v) => v + 1);
-              void refresh();
+        {setupRequired && (
+          <RuntimeSetupPanel
+            onInstalled={() => {
+              setRuntimeReady(true);
+              refresh().catch(() => {});
             }}
-            onError={setError}
           />
         )}
 
-        <div
-          className={tab === "chat" ? "tab-panel" : "tab-panel tab-hidden"}
-          aria-hidden={tab !== "chat"}
-          inert={tab !== "chat" ? true : undefined}
-        >
-          <ChatPanel
-            serverStatus={serverStatus}
-            servers={serverStatus?.servers ?? []}
-            pendingServerId={pendingChatServerId}
-            visible={tab === "chat"}
-            onPendingServerConsumed={consumePendingChatServer}
-            onError={setError}
-          />
-        </div>
+        {!setupRequired && (
+          <>
+            {tab === "models" && (
+              <ModelsPanel
+                models={models}
+                platform={platform}
+                onRefresh={refresh}
+                onError={setError}
+              />
+            )}
 
-        {tab === "monitor" && <MonitorPanel />}
+            {tab === "config" && configDraft && (
+              <ConfigPanel
+                config={config}
+                configDraft={configDraft}
+                setConfigDraft={setConfigDraft}
+                gpu={gpu}
+                platform={platform}
+                onSavePaths={() =>
+                  api.setConfig(configDraft).then((c) => {
+                    setConfig(c);
+                    setConfigVersion((v) => v + 1);
+                    void refresh();
+                  })
+                }
+                onRefresh={() => {
+                  setConfigVersion((v) => v + 1);
+                  void refresh();
+                }}
+                onError={setError}
+              />
+            )}
 
-        {tab === "benchmarks" && (
-          <BenchmarkPanel
-            servers={serverStatus?.servers ?? []}
-            onError={setError}
-          />
-        )}
+            <div
+              className={tab === "chat" ? "tab-panel" : "tab-panel tab-hidden"}
+              aria-hidden={tab !== "chat"}
+              inert={tab !== "chat" ? true : undefined}
+            >
+              <ChatPanel
+                serverStatus={serverStatus}
+                servers={serverStatus?.servers ?? []}
+                pendingServerId={pendingChatServerId}
+                visible={tab === "chat"}
+                onPendingServerConsumed={consumePendingChatServer}
+                onError={setError}
+              />
+            </div>
 
-        {tab === "server" && (
-          <ServerPanel
-            models={models}
-            gpu={gpu}
-            serverStatus={serverStatus}
-            configVersion={configVersion}
-            busy={busy}
-            setBusy={setBusy}
-            onRefresh={pullServerStatus}
-            onError={setError}
-            onServerReady={setPendingChatServerId}
-          />
+            {tab === "monitor" && <MonitorPanel />}
+
+            {benchmarksEnabled && tab === "benchmarks" && (
+              <BenchmarkPanel
+                servers={serverStatus?.servers ?? []}
+                onError={setError}
+              />
+            )}
+
+            {tab === "server" && (
+              <ServerPanel
+                models={models}
+                gpu={gpu}
+                serverStatus={serverStatus}
+                configVersion={configVersion}
+                busy={busy}
+                setBusy={setBusy}
+                onRefresh={pullServerStatus}
+                onError={setError}
+                onServerReady={setPendingChatServerId}
+              />
+            )}
+          </>
         )}
       </main>
     </div>

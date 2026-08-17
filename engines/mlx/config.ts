@@ -11,7 +11,7 @@ function adapterPath(def: ServerDefinition): string | undefined {
   return trimmed || undefined;
 }
 
-/** Env-file contents nativeSupervisor reads to spawn mlx_lm.server. */
+/** Env-file contents nativeSupervisor reads to spawn revolver_mlx_server. */
 export function buildMlxLoadEnv(def: ServerDefinition): LoadEnvPlan {
   const modelPath = def.modelPath.includes("/") && !def.modelPath.startsWith("/")
     ? def.modelPath
