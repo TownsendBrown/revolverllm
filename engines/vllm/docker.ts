@@ -1,3 +1,5 @@
+import { LOAD_ENV_FILE_SH } from "../../shared/loadEnvFile";
+
 /** Port vLLM OpenAI server listens on inside the container. */
 export const VLLM_CONTAINER_PORT = 8000;
 
@@ -14,6 +16,8 @@ export function vllmImage(): string {
 /** Embedded entrypoint: sources per-server env and execs the OpenAI-compatible API server. */
 export const VLLM_ENTRYPOINT_SCRIPT = `#!/bin/sh
 set -e
+
+${LOAD_ENV_FILE_SH}
 
 CONFIG_DIR="\${VLLM_CONFIG_DIR:-/config}"
 ENV_FILE="\${VLLM_ENV_FILE:-vllm-load.env}"
@@ -33,8 +37,7 @@ ENFORCE_EAGER=""
 API_KEY=""
 
 if [ -f "$ENV_PATH" ]; then
-  # shellcheck disable=SC1090
-  . "$ENV_PATH"
+  load_env_file "$ENV_PATH"
   MODEL="\${MODEL:-}"
   HOST="\${VLLM_HOST:-0.0.0.0}"
   PORT="\${VLLM_PORT:-8000}"

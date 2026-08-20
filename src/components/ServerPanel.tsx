@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import LoadProgressBar from "./LoadProgressBar";
-import HubBrowser from "./HubBrowser";
 import { useStickyScroll } from "../lib/useStickyScroll";
 import {
   api,
@@ -754,8 +753,10 @@ export default function ServerPanel({
                   </button>
                 )}
               </div>
-              <HubBrowser compact onDownloadComplete={onRefresh} />
               <div className="model-scroll">
+                {models.filter((m) => m.hasWeights).length === 0 && (
+                  <p className="muted">No models on disk. Download from the Models tab.</p>
+                )}
                 {models
                   .filter((m) => m.hasWeights)
                   .map((m) => {

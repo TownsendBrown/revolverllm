@@ -61,12 +61,12 @@ function readDownloadSettings(): DownloadSettings {
     ".internal",
     "download-settings.json",
   );
-  const defaults: DownloadSettings = { dest: "hub", maxConcurrent: 1 };
+  const defaults: DownloadSettings = { dest: "models", maxConcurrent: 1 };
   if (!existsSync(path)) return defaults;
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<DownloadSettings>;
     return {
-      dest: raw.dest === "models" ? "models" : "hub",
+      dest: raw.dest === "hub" ? "hub" : "models",
       maxConcurrent: Math.max(1, Math.min(3, Number(raw.maxConcurrent) || 1)),
     };
   } catch {

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statfsSync, statSync,
 import { join } from "path";
 import { loadConfig } from "../electron/lib/config";
 import { getDataDir } from "../electron/lib/config";
+import { modelDownloadDir } from "../electron/lib/paths";
 import { loadSettings } from "../electron/lib/settings";
 import type { DownloadJob, DownloadJobStatus, StartModelDownloadRequest } from "../shared/types";
 import { mergeWithCompanions } from "../shared/hubDownloadFiles";
@@ -58,16 +59,6 @@ function freeBytesForPath(dir: string): number | null {
   }
 }
 
-function destDir(dest: "hub" | "models", repoId: string): string {
-  const cfg = loadConfig();
-  if (dest === "models") {
-    const base = cfg.modelsDir;
-    const name = repoId.split("/").pop() ?? repoId.replace("/", "-");
-    return join(base, name);
-  }
-  return join(cfg.hubModelsDir, ...repoId.split("/"));
-}
-
 const abortControllers = new Map<string, AbortController>();
 
 export function listDownloadJobs(): DownloadJob[] {
@@ -89,8 +80,8 @@ export async function startDownload(req: StartModelDownloadRequest): Promise<Dow
 
   const repoId = req.repoId.trim();
   const revision = req.revision?.trim() || "main";
-  const dest = req.dest ?? settings.downloads.dest;
-  const targetDir = destDir(dest, repoId);
+  const dest = req.dest ?? settings.downloads.dest ?? "models";
+  const targetDir = modelDownloadDir(dest, repoId);
 
   const bytesTotal = await probeRepoSize(repoId, revision, req.files ?? null);
   const free = freeBytesForPath(loadConfig().modelsDir);

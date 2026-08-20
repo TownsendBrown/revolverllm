@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { existsSync, statSync } from "fs";
+import { existsSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, join } from "path";
 import { promisify } from "util";
 import { getRevolverRoot } from "../electron/lib/appRoot";
@@ -15,11 +15,27 @@ export interface HostPaths {
   repoRoot: string;
 }
 
+function stripTrailingSlash(p: string): string {
+  return p.replace(/[/\\]+$/, "");
+}
+
+function samePath(a: string, b: string): boolean {
+  return stripTrailingSlash(a) === stripTrailingSlash(b);
+}
+
 function remapPrefix(path: string, containerPrefix: string, hostPrefix: string): string | null {
   if (path === containerPrefix) return hostPrefix;
   const prefix = containerPrefix.endsWith("/") ? containerPrefix : `${containerPrefix}/`;
   if (path.startsWith(prefix)) return hostPrefix + path.slice(containerPrefix.length);
   return null;
+}
+
+/** True when the process sees host paths already (Electron sets REVOLVER_DOCKER=1). */
+function hasContainerHostSplit(cfg: { modelsDir: string }): boolean {
+  const hostModels = process.env.REVOLVER_HOST_MODELS_DIR;
+  if (!hostModels) return false;
+  const containerModels = process.env.REVOLVER_MODELS_DIR ?? cfg.modelsDir;
+  return !samePath(containerModels, hostModels);
 }
 
 /** Map container-visible paths to host paths when Revolver runs in Docker. */
@@ -31,6 +47,10 @@ export function resolveHostPath(
 
   const hostModels = process.env.REVOLVER_HOST_MODELS_DIR;
   if (!hostModels) return configPath;
+
+  // Electron always sets REVOLVER_DOCKER=1 but uses host paths. Remapping hub
+  // `{localRoot}/hub/models` → `{modelsDir}/hub` made Open report Path not found.
+  if (!hasContainerHostSplit(cfg)) return configPath;
 
   const containerModels = process.env.REVOLVER_MODELS_DIR ?? cfg.modelsDir;
   const fromModels = remapPrefix(configPath, containerModels, hostModels);
@@ -47,6 +67,16 @@ export function resolveHostPath(
   if (fromLocal) return fromLocal;
 
   return configPath;
+}
+
+/** Directory Finder / Explorer should open. Files resolve to their parent folder. */
+export function folderForOpen(hostPath: string): string {
+  try {
+    const resolved = realpathSync(hostPath);
+    return statSync(resolved).isDirectory() ? resolved : dirname(resolved);
+  } catch {
+    return hostPath;
+  }
 }
 
 /** Host-visible Revolver repo root (codebase). Used for “open data folder” in the UI. */
@@ -75,6 +105,7 @@ export function hostPathsForDocker(
   if (process.env.REVOLVER_DOCKER !== "1") return undefined;
   const hostModels = process.env.REVOLVER_HOST_MODELS_DIR;
   if (!hostModels || !isAbsolute(hostModels)) return undefined;
+  if (!hasContainerHostSplit(cfg)) return undefined;
   return {
     modelsDir: hostModels,
     hubModelsDir: resolveHostPath(cfg.hubModelsDir, cfg),
@@ -92,22 +123,23 @@ export function runtimeHostOs(): HostOs {
 
 /** Open a host path via OS utilities (server / host-agent). Empty string = success. */
 export async function openPathOnHost(hostPath: string): Promise<string> {
-  if (!existsSync(hostPath)) return "Path not found";
+  const target = folderForOpen(hostPath);
+  if (!existsSync(target)) return "Path not found";
 
-  const isDir = statSync(hostPath).isDirectory();
+  const isDir = statSync(target).isDirectory();
   const platform = process.platform;
 
   try {
     if (platform === "darwin") {
-      await execFileAsync("open", isDir ? [hostPath] : ["-R", hostPath]);
+      await execFileAsync("open", isDir ? [target] : ["-R", target]);
       return "";
     }
     if (platform === "linux") {
-      await execFileAsync("xdg-open", [hostPath]);
+      await execFileAsync("xdg-open", [target]);
       return "";
     }
     if (platform === "win32") {
-      await execFileAsync("explorer", [isDir ? hostPath : `/select,${hostPath}`]);
+      await execFileAsync("explorer", [isDir ? target : `/select,${target}`]);
       return "";
     }
     return `Unsupported platform: ${platform}`;

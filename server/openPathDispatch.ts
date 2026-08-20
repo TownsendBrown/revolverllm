@@ -1,5 +1,5 @@
 import { loadConfig } from "../electron/lib/config";
-import { openPathOnHost, resolveHostPath } from "../shared/openPath";
+import { folderForOpen, openPathOnHost, resolveHostPath } from "../shared/openPath";
 import { hostAgentCall, metalEnabled } from "./hostAgent";
 import { hostOpenAgentCall, hostOpenAgentEnabled } from "./hostOpenAgent";
 
@@ -7,7 +7,7 @@ export type OpenPathFn = (hostPath: string) => Promise<string>;
 
 let nativeOpener: OpenPathFn | null = null;
 
-/** Electron registers shell.openPath here; server uses spawn-based openPathOnHost. */
+/** Electron registers the host opener here; server uses spawn-based openPathOnHost. */
 export function setNativeOpenPathOpener(opener: OpenPathFn | null): void {
   nativeOpener = opener;
 }
@@ -33,7 +33,7 @@ async function openViaHostAgent(hostPath: string): Promise<string> {
 
 export async function dispatchOpenPath(configPath: string): Promise<string> {
   const cfg = loadConfig();
-  const hostPath = resolveHostPath(configPath, cfg);
+  const hostPath = folderForOpen(resolveHostPath(configPath, cfg));
 
   if (nativeOpener) {
     return nativeOpener(hostPath);

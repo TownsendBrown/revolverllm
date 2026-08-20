@@ -4,7 +4,8 @@ import { getDataDir } from "./config";
 import { getGpuInfo } from "./gpu";
 
 /** Default env for Electron. Docker CLI is used when a server's runtime is docker;
- * native servers spawn llama-server on the host instead. */
+ * native servers spawn llama-server on the host instead.
+ * REVOLVER_DOCKER=1 here does not mean a container mount split — model paths are host paths. */
 export function applyElectronDockerEnv(): void {
   process.env.REVOLVER_DOCKER = "1";
   if (!process.env.REVOLVER_ROOT) process.env.REVOLVER_ROOT = getRevolverRoot();

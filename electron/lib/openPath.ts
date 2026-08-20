@@ -1,14 +1,6 @@
-import { existsSync, statSync } from "fs";
-import { shell } from "electron";
+import { openPathOnHost } from "../../shared/openPath";
 
-/** Open via Electron shell APIs (Finder / default file manager). Empty string = success. */
+/** Open in Finder / file manager. Uses `open` on macOS — shell.openPath returns "Invalid path". */
 export async function openPathElectron(hostPath: string): Promise<string> {
-  if (!existsSync(hostPath)) return "Path not found";
-
-  if (statSync(hostPath).isDirectory()) {
-    return shell.openPath(hostPath);
-  }
-
-  shell.showItemInFolder(hostPath);
-  return "";
+  return openPathOnHost(hostPath);
 }

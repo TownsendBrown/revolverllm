@@ -81,6 +81,33 @@ export function getHubModelsDir(): string {
   return loadConfig().hubModelsDir;
 }
 
+/** Roots the catalog should scan for downloaded weights (GGUF + HF trees). */
+export function getModelScanRoots(): string[] {
+  const roots = [getDownloadsDir(), getHubModelsDir()];
+  const seen = new Set<string>();
+  return roots.filter((root) => {
+    if (seen.has(root)) return false;
+    seen.add(root);
+    return true;
+  });
+}
+
+/** `{base}/{owner}/{name}` — GGUF and MLX share this layout. */
+export function joinRepoDownloadDir(baseDir: string, repoId: string): string {
+  const parts = repoId.split("/").filter(Boolean);
+  if (parts.length === 0) throw new Error("Invalid repo id");
+  return join(baseDir, ...parts);
+}
+
+/**
+ * Hugging Face downloads land under owner/name. `dest` picks modelsDir vs
+ * hubModelsDir; default callers use modelsDir.
+ */
+export function modelDownloadDir(dest: "hub" | "models", repoId: string): string {
+  const base = dest === "hub" ? getHubModelsDir() : getDownloadsDir();
+  return joinRepoDownloadDir(base, repoId);
+}
+
 export function getHttpServerConfigPath(): string {
   return join(getDataDir(), "http-server-config.json");
 }

@@ -70,7 +70,7 @@ export default function InstalledModelsSection({ models, platform, onRefresh, on
               <div className="installed-model-actions">
                 {platform?.canOpenPath && m.path && (
                   <button type="button" className="ghost" onClick={() => openModel(m.path!)}>
-                    Open
+                    Open folder
                   </button>
                 )}
                 <button

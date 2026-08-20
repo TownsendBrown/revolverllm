@@ -13,6 +13,7 @@ import {
 } from "../engines/llamacpp/docker";
 import { mlxEnvFileName } from "../engines/mlx/docker";
 import { mlxTokenizerPresent } from "../shared/hubDownloadFiles";
+import { parseLoadEnv } from "../shared/loadEnvFile";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,16 +51,8 @@ function appendLog(rec: ServerRecord, line: string): void {
 }
 
 function parseEnvFile(path: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!existsSync(path)) return out;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq < 0) continue;
-    out[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
-  }
-  return out;
+  if (!existsSync(path)) return {};
+  return parseLoadEnv(readFileSync(path, "utf8"));
 }
 
 function parsePids(text: string): number[] {

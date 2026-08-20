@@ -6,6 +6,7 @@ import { getDataDir, loadConfig } from "../electron/lib/config";
 import { getGpuInfo } from "../electron/lib/gpu";
 import type { EngineContainerSpec } from "../engines/types";
 import { vulkanDriverEnv } from "../shared/gpuDevices";
+import { renderLoadEnv } from "../shared/loadEnvFile";
 import type { GpuDevice, ServerDefinition } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
@@ -483,11 +484,7 @@ export function writeLoadEnv(
 ): void {
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
-  const body = Object.entries(lines)
-    .filter(([, v]) => v != null && v !== "")
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  writeFileSync(join(dir, fileName), `${body}\n`);
+  writeFileSync(join(dir, fileName), renderLoadEnv(lines));
 }
 
 export function clearLoadEnv(

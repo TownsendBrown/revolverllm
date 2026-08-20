@@ -7,6 +7,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { NativeSupervisor } from "../../server/nativeSupervisor";
 import { llamaEnvFileName } from "../../engines/llamacpp/docker";
+import { renderLoadEnv } from "../../shared/loadEnvFile";
 import { claimGpus, resetGpuClaims } from "../../server/gpuClaims";
 
 const MOCK_BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "mock-llama-server.mjs");
@@ -43,10 +44,7 @@ async function waitForHealth(port: number, timeoutMs = 8_000): Promise<void> {
 }
 
 function writeLoadEnv(configDir: string, serverId: string, env: Record<string, string>): void {
-  const body = Object.entries(env)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  writeFileSync(join(configDir, llamaEnvFileName(serverId)), `${body}\n`);
+  writeFileSync(join(configDir, llamaEnvFileName(serverId)), renderLoadEnv(env));
 }
 
 describe("NativeSupervisor multi-instance", () => {
@@ -153,5 +151,24 @@ describe("NativeSupervisor multi-instance", () => {
     const inspect = await native.restart(id, await freePort());
     assert.equal(inspect.status, "idle");
     assert.equal(inspect.pid, null);
+  });
+
+  it("starts when MODEL_PATH contains spaces", async () => {
+    const id = "spaced";
+    ids.push(id);
+    const spacedDir = join(configDir, "Application Support", "Revolver");
+    mkdirSync(spacedDir, { recursive: true });
+    const spacedModel = join(spacedDir, "dummy.gguf");
+    writeFileSync(spacedModel, "GGUF");
+    const port = await freePort();
+    writeLoadEnv(configDir, id, {
+      MODEL_PATH: spacedModel,
+      LLAMA_PORT: String(port),
+      BACKEND: "cpu",
+    });
+    const inspect = await native.restart(id, port);
+    assert.equal(inspect.status, "running", native.logs(id).join("\n"));
+    await waitForHealth(port);
+    await native.stop(id);
   });
 });

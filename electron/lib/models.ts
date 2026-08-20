@@ -3,7 +3,14 @@ import { dirname, join, relative, resolve } from "path";
 import { load as yamlLoad } from "js-yaml";
 import { readGgufMetadataCached } from "./ggufMetadata";
 import { metaGet, metaNumber, metaString } from "./ggufMeta";
-import { getDownloadsDir, getHubModelsDir, getLocalPaths, getModelIndexCachePath, loadConfig } from "./paths";
+import {
+  getDownloadsDir,
+  getHubModelsDir,
+  getLocalPaths,
+  getModelIndexCachePath,
+  getModelScanRoots,
+  loadConfig,
+} from "./paths";
 import { readGgufCacheEntry } from "./localMeta";
 import { normalizeModelPath, toFsPath } from "./modelPaths";
 import { isHfRepoId, scanLocalHfModels, classifyLocalModelPath } from "./hfModels";
@@ -112,31 +119,49 @@ export function scanHubModels(): HubModel[] {
   return results;
 }
 
-export function scanLocalGguf(): LocalGgufModel[] {
-  const root = getDownloadsDir();
-  if (!existsSync(root)) return [];
-
+/** Scan GGUF weights under the given roots. Dedupes by resolved path. */
+export function scanGgufUnderRoots(roots: string[]): LocalGgufModel[] {
   const models: LocalGgufModel[] = [];
-  const walk = (dir: string) => {
+  const seen = new Set<string>();
+
+  const walk = (dir: string, root: string) => {
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, ent.name);
-      if (ent.isDirectory()) walk(p);
-      else if (ent.name.endsWith(".gguf") && !ent.name.startsWith("mmproj")) {
-        const mm = findMmproj(join(p, ".."), p);
-        models.push({
-          id: relative(root, p),
-          path: p,
-          relPath: relative(root, p),
-          sizeBytes: statSync(p).size,
-          metadata: { name: ent.name.replace(/\.gguf$/, "") },
-          visionPath: mm,
-          visionSizeBytes: mm ? statSync(mm).size : 0,
-        });
+      if (ent.isDirectory()) {
+        walk(p, root);
+        continue;
       }
+      if (!ent.name.endsWith(".gguf") || ent.name.startsWith("mmproj")) continue;
+      let key = p;
+      try {
+        key = realpathSync(p);
+      } catch {
+        /* keep p */
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const mm = findMmproj(join(p, ".."), p);
+      models.push({
+        id: relative(root, p),
+        path: p,
+        relPath: relative(root, p),
+        sizeBytes: statSync(p).size,
+        metadata: { name: ent.name.replace(/\.gguf$/, "") },
+        visionPath: mm,
+        visionSizeBytes: mm ? statSync(mm).size : 0,
+      });
     }
   };
-  walk(root);
+
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    walk(root, root);
+  }
   return models;
+}
+
+export function scanLocalGguf(): LocalGgufModel[] {
+  return scanGgufUnderRoots(getModelScanRoots());
 }
 
 export function linkHubToLocal(hub: HubModel[], local: LocalGgufModel[]): void {

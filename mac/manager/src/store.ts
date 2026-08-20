@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { renderLoadEnv } from "../../../shared/loadEnvFile";
 
 export interface ServerDefinition {
   id: string;
@@ -117,10 +118,7 @@ export function writeLoadEnv(def: ServerDefinition): void {
   } else {
     lines.FLASH_ATTN = "auto";
   }
-  const body = Object.entries(lines)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  writeFileSync(join(CONFIG_DIR, envFileName(def.id)), `${body}\n`);
+  writeFileSync(join(CONFIG_DIR, envFileName(def.id)), renderLoadEnv(lines));
 }
 
 export function clearLoadEnv(serverId: string): void {

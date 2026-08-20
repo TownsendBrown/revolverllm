@@ -1,3 +1,4 @@
+import { LOAD_ENV_FILE_SH } from "../../shared/loadEnvFile";
 import type { InferenceBackend } from "../../shared/types";
 
 /** Port llama-server listens on inside the container. */
@@ -33,6 +34,8 @@ export function llamaImage(backend: InferenceBackend): string {
 export const LLAMA_ENTRYPOINT_SCRIPT = `#!/bin/sh
 set -e
 
+${LOAD_ENV_FILE_SH}
+
 CONFIG_DIR="\${LLAMA_CONFIG_DIR:-/config}"
 ENV_FILE="\${LLAMA_ENV_FILE:-llama-load.env}"
 ENV_PATH="$CONFIG_DIR/$ENV_FILE"
@@ -54,8 +57,7 @@ API_KEY=""
 BACKEND="\${BACKEND:-cpu}"
 
 if [ -f "$ENV_PATH" ]; then
-  # shellcheck disable=SC1090
-  . "$ENV_PATH"
+  load_env_file "$ENV_PATH"
   MODEL="\${MODEL_PATH:-}"
   CTX="\${CTX_SIZE:-}"
   GPU_LAYERS="\${N_GPU_LAYERS:-}"

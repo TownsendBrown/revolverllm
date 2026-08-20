@@ -1,3 +1,5 @@
+import { LOAD_ENV_FILE_SH } from "../../shared/loadEnvFile";
+
 /** Port legacy vLLM OpenAI server listens on inside the container. */
 export const VLLM_LEGACY_CONTAINER_PORT = 8000;
 
@@ -19,6 +21,8 @@ export function vllmLegacyImage(): string {
 export const VLLM_LEGACY_ENTRYPOINT_SCRIPT = `#!/bin/sh
 set -e
 
+${LOAD_ENV_FILE_SH}
+
 CONFIG_DIR="\${VLLM_CONFIG_DIR:-/config}"
 ENV_FILE="\${VLLM_ENV_FILE:-vllm-legacy-load.env}"
 ENV_PATH="$CONFIG_DIR/$ENV_FILE"
@@ -36,8 +40,7 @@ ENFORCE_EAGER=""
 API_KEY=""
 
 if [ -f "$ENV_PATH" ]; then
-  # shellcheck disable=SC1090
-  . "$ENV_PATH"
+  load_env_file "$ENV_PATH"
   MODEL="\${MODEL:-}"
   HOST="\${VLLM_HOST:-0.0.0.0}"
   PORT="\${VLLM_PORT:-8000}"

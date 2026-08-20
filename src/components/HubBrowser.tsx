@@ -162,6 +162,7 @@ export default function HubBrowser({ compact, onDownloadComplete }: Props) {
     try {
       await api.startModelDownload({
         repoId: selectedRepo,
+        dest: "models",
         files: [...pickedFiles],
       });
       refreshJobs();

@@ -3,6 +3,29 @@
 # Reads load config from LLAMA_CONFIG_DIR / LLAMA_ENV_FILE — same contract as Revolver containers.
 set -e
 
+# Assign KEY=VALUE without word-splitting (macOS "Application Support" paths).
+load_env_file() {
+  [ -f "$1" ] || return 0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      ""|"#"*) continue ;;
+    esac
+    _key="${_line%%=*}"
+    _val="${_line#*=}"
+    _q1="${_val%"${_val#?}"}"
+    _q2="${_val#"${_val%?}"}"
+    if [ "$_q1" = "$_q2" ] && { [ "$_q1" = '"' ] || [ "$_q1" = "'" ]; }; then
+      _val="${_val#?}"
+      _val="${_val%?}"
+    fi
+    case "$_key" in
+      ""|*[!A-Za-z0-9_]*) continue ;;
+    esac
+    export "$_key=$_val"
+  done < "$1"
+  unset _line _key _val _q1 _q2
+}
+
 CONFIG_DIR="${LLAMA_CONFIG_DIR:-./config}"
 ENV_FILE="${LLAMA_ENV_FILE:-llama-load.env}"
 ENV_PATH="$CONFIG_DIR/$ENV_FILE"
@@ -25,8 +48,7 @@ API_KEY=""
 BACKEND="${BACKEND:-metal}"
 
 if [ -f "$ENV_PATH" ]; then
-  # shellcheck disable=SC1090
-  . "$ENV_PATH"
+  load_env_file "$ENV_PATH"
   MODEL="${MODEL_PATH:-}"
   CTX="${CTX_SIZE:-}"
   GPU_LAYERS="${N_GPU_LAYERS:-}"
