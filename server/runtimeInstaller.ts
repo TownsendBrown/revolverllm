@@ -12,20 +12,50 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  chmodSync,
   statfsSync,
   writeFileSync,
 } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { createRequire } from "node:module";
 import { getRevolverRoot } from "../electron/lib/appRoot";
 import { getDataDir } from "../electron/lib/config";
-import type { RuntimeCatalog, RuntimeId, RuntimeInstallJob, RuntimeStatus } from "../shared/types";
+import { getGpuInfo } from "../electron/lib/gpu";
+import { detectComputeCaps } from "./nativeBackends";
+import {
+  isLinuxRuntimeId,
+  linuxRuntimeBackend,
+  recommendedLinuxRuntimeId,
+} from "../shared/nativeRuntimeMatch";
+import {
+  LINUX_RUNTIME_IDS,
+  type InferenceBackend,
+  type LinuxRuntimeId,
+  type RuntimeCatalog,
+  type RuntimeId,
+  type RuntimeInstallJob,
+  type RuntimeStatus,
+} from "../shared/types";
 
 const nodeRequire = createRequire(import.meta.url);
 
 const jobs = new Map<string, RuntimeInstallJob>();
 const abortControllers = new Map<string, AbortController>();
 let activeJobId: string | null = null;
+
+export interface LinuxCatalogAsset {
+  label: string;
+  backend: InferenceBackend;
+  matchComputeCaps?: number[];
+  tag: string;
+  asset: string;
+  url: string;
+  sha256: string;
+  sizeBytes: number;
+  unpackDir: string;
+  binary?: string;
+  libDir?: string;
+}
 
 export interface RuntimeCatalogFile {
   schemaVersion: number;
@@ -49,6 +79,7 @@ export interface RuntimeCatalogFile {
     mlxEngineCommit: string;
     pythonVersion: string;
   };
+  linux?: Record<LinuxRuntimeId, LinuxCatalogAsset>;
 }
 
 function runtimesRoot(): string {
@@ -116,6 +147,17 @@ export function loadRuntimeCatalog(): RuntimeCatalogFile {
 
 export function catalogForUi(): RuntimeCatalog {
   const c = loadRuntimeCatalog();
+  const linux = LINUX_RUNTIME_IDS.map((id) => {
+    const spec = c.linux?.[id];
+    return {
+      id,
+      label: spec?.label ?? id,
+      sizeBytes: spec?.sizeBytes ?? 0,
+      tag: spec?.tag,
+      backend: spec?.backend ?? linuxRuntimeBackend(id),
+      matchComputeCaps: spec?.matchComputeCaps,
+    };
+  });
   return {
     llamacpp: {
       id: "llamacpp",
@@ -131,10 +173,11 @@ export function catalogForUi(): RuntimeCatalog {
       mlxEngineCommit: c.mlxRuntime.mlxEngineCommit.slice(0, 7),
       minMacos: c.mlxRuntime.minMacos,
     },
+    linux,
   };
 }
 
-function readCurrentTag(kind: "llamacpp" | "mlx"): string | null {
+function readCurrentTag(kind: string): string | null {
   const marker = join(runtimesRoot(), kind, "current");
   if (!existsSync(marker)) return null;
   try {
@@ -144,7 +187,7 @@ function readCurrentTag(kind: "llamacpp" | "mlx"): string | null {
   }
 }
 
-function setCurrentTag(kind: "llamacpp" | "mlx", tag: string): void {
+function setCurrentTag(kind: string, tag: string): void {
   const base = join(runtimesRoot(), kind);
   mkdirSync(base, { recursive: true });
   const target = join(base, tag);
@@ -182,6 +225,106 @@ export function installedLlamaServerBin(): string | null {
   if (!dir) return null;
   const bin = join(dir, "llama-server");
   return existsSync(bin) ? bin : null;
+}
+
+export interface InstalledLinuxRuntime {
+  id: LinuxRuntimeId;
+  root: string;
+  bin: string;
+  libDir: string;
+  tag: string;
+}
+
+function linuxAsset(id: LinuxRuntimeId): LinuxCatalogAsset | null {
+  return loadRuntimeCatalog().linux?.[id] ?? null;
+}
+
+/** Locate llama-server in an extracted runtime tree (CUDA pack or ggml ubuntu layout). */
+export function findLlamaServerBin(root: string, binaryRel?: string, depth = 0): string | null {
+  const candidates = [
+    binaryRel && depth === 0 ? join(root, binaryRel) : "",
+    join(root, "llama-server"),
+    join(root, "bin", "llama-server"),
+    join(root, "build", "bin", "llama-server"),
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  if (depth >= 2) return null;
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    const nested = findLlamaServerBin(join(root, e.name), undefined, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function libDirForBin(root: string, bin: string, libRel?: string): string {
+  if (libRel) {
+    const dir = join(root, libRel);
+    if (existsSync(dir)) return dir;
+  }
+  const nextToBin = dirname(bin);
+  const packLib = join(root, "lib");
+  if (existsSync(packLib)) return packLib;
+  return nextToBin;
+}
+
+export function installedLinuxRuntime(id: LinuxRuntimeId): InstalledLinuxRuntime | null {
+  const tag = readCurrentTag(id);
+  if (!tag) return null;
+  const root = join(runtimesRoot(), id, tag);
+  const spec = linuxAsset(id);
+  const bin = findLlamaServerBin(root, spec?.binary);
+  if (!bin) return null;
+  if (hasDanglingSymlinks(dirname(bin))) return null;
+  return { id, root, bin, libDir: libDirForBin(root, bin, spec?.libDir), tag };
+}
+
+export function listInstalledLinuxRuntimes(): InstalledLinuxRuntime[] {
+  return LINUX_RUNTIME_IDS.map((id) => installedLinuxRuntime(id)).filter(
+    (r): r is InstalledLinuxRuntime => r != null,
+  );
+}
+
+export function resolveLinuxLlamaServer(opts?: {
+  backend?: InferenceBackend;
+  computeCaps?: number[];
+  forceId?: LinuxRuntimeId;
+}): InstalledLinuxRuntime | null {
+  const installed = listInstalledLinuxRuntimes();
+  if (!installed.length) return null;
+  if (opts?.forceId) return installed.find((r) => r.id === opts.forceId) ?? null;
+
+  const backend = opts?.backend;
+  if (backend === "cuda") {
+    return installed.find((r) => r.id === "linux-cuda") ?? null;
+  }
+  if (backend === "vulkan") {
+    return installed.find((r) => r.id === "linux-vulkan") ?? null;
+  }
+  if (backend === "cpu") {
+    return (
+      installed.find((r) => r.id === "linux-cpu") ??
+      installed[0] ??
+      null
+    );
+  }
+  const caps = opts?.computeCaps ?? detectComputeCaps();
+  let gpu = null;
+  try {
+    gpu = getGpuInfo();
+  } catch {
+    gpu = null;
+  }
+  const rec = recommendedLinuxRuntimeId({ computeCaps: caps, gpu });
+  return installed.find((r) => r.id === rec) ?? installed[0] ?? null;
 }
 
 export function installedMlxRuntimeDir(): string | null {
@@ -243,7 +386,7 @@ async function downloadUrl(opts: {
 
 function extractTarGz(archive: string, destDir: string): void {
   mkdirSync(destDir, { recursive: true });
-  const r = spawnSync("tar", ["-xzf", archive, "-C", destDir], { encoding: "utf8" });
+  const r = spawnSync("tar", ["-xzf", archive, "-C", destDir, "--no-same-owner"], { encoding: "utf8" });
   if (r.status !== 0) {
     throw new Error(r.stderr?.trim() || r.stdout?.trim() || "tar extract failed");
   }
@@ -300,7 +443,7 @@ function ensureFreeSpace(dir: string, archiveBytes: number): void {
 }
 
 /** Drop a tree that failed verification, keeping any older working install selected. */
-function clearInstall(kind: "llamacpp" | "mlx", tag: string): void {
+function clearInstall(kind: string, tag: string): void {
   rmSync(join(runtimesRoot(), kind, tag), { recursive: true, force: true });
   if (readCurrentTag(kind) === tag) {
     rmSync(join(runtimesRoot(), kind, "current"), { force: true });
@@ -430,6 +573,93 @@ async function installLlamaCpp(jobId: string, signal: AbortSignal): Promise<void
   });
 }
 
+async function installLinuxRuntime(
+  jobId: string,
+  runtimeId: LinuxRuntimeId,
+  signal: AbortSignal,
+): Promise<void> {
+  if (process.platform === "darwin") {
+    throw new Error("Linux llama.cpp runtimes cannot be installed on macOS");
+  }
+  const spec = linuxAsset(runtimeId);
+  if (!spec) throw new Error(`Linux runtime ${runtimeId} is missing from runtimes/catalog.json`);
+
+  const staging = join(runtimesRoot(), ".staging", jobId);
+  const archive = join(staging, spec.asset);
+  mkdirSync(staging, { recursive: true });
+  ensureFreeSpace(staging, spec.sizeBytes);
+
+  updateJob(jobId, { phase: "download", progress: 0, bytesTotal: spec.sizeBytes });
+  await downloadUrl({
+    url: spec.url,
+    destPath: archive,
+    expectedSha256: spec.sha256,
+    signal,
+    onProgress: (bytes, total) => {
+      updateJob(jobId, {
+        bytesDone: bytes,
+        bytesTotal: total ?? spec.sizeBytes,
+        progress: total ? Math.min(40, Math.round((bytes / total) * 40)) : 10,
+      });
+    },
+  });
+
+  updateJob(jobId, { phase: "extract", progress: 45 });
+  const extractRoot = join(staging, "extract");
+  rmSync(extractRoot, { recursive: true, force: true });
+  extractTarGz(archive, extractRoot);
+
+  const unpacked =
+    spec.unpackDir === "." ? extractRoot : join(extractRoot, spec.unpackDir);
+  if (!existsSync(unpacked)) {
+    throw new Error(`Expected unpack dir ${spec.unpackDir} not found in archive`);
+  }
+  rmSync(archive, { force: true });
+
+  const installDir = join(runtimesRoot(), runtimeId, spec.tag);
+  moveIntoPlace(unpacked, installDir);
+
+  try {
+    updateJob(jobId, { phase: "verify", progress: 85 });
+    const bin = findLlamaServerBin(installDir, spec.binary);
+    if (!bin) throw new Error("llama-server not found in extracted runtime");
+    try {
+      chmodSync(bin, 0o755);
+    } catch {
+      /* already executable */
+    }
+    const libDir = libDirForBin(installDir, bin, spec.libDir);
+    const probe = spawnSync(bin, ["--version"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        LD_LIBRARY_PATH: libDir
+          ? `${libDir}${process.env.LD_LIBRARY_PATH ? `:${process.env.LD_LIBRARY_PATH}` : ""}`
+          : process.env.LD_LIBRARY_PATH,
+      },
+    });
+    if (probe.status !== 0) {
+      throw new Error(
+        probe.stderr?.trim() || probe.stdout?.trim() || "llama-server --version failed",
+      );
+    }
+  } catch (e) {
+    clearInstall(runtimeId, spec.tag);
+    throw e;
+  }
+
+  setCurrentTag(runtimeId, spec.tag);
+  rmSync(staging, { recursive: true, force: true });
+  updateJob(jobId, {
+    phase: "done",
+    progress: 100,
+    bytesDone: spec.sizeBytes,
+    bytesTotal: spec.sizeBytes,
+    installPath: installDir,
+  });
+}
+
 async function installMlx(jobId: string, signal: AbortSignal): Promise<void> {
   if (process.platform !== "darwin") throw new Error("MLX runtime install is macOS only");
   const cat = loadRuntimeCatalog();
@@ -507,6 +737,7 @@ async function runJob(id: string): Promise<void> {
   try {
     if (job.runtimeId === "llamacpp") await installLlamaCpp(id, ac.signal);
     else if (job.runtimeId === "mlx") await installMlx(id, ac.signal);
+    else if (isLinuxRuntimeId(job.runtimeId)) await installLinuxRuntime(id, job.runtimeId, ac.signal);
     else throw new Error(`Unknown runtime: ${job.runtimeId}`);
     updateJob(id, { status: "done", progress: 100 });
   } catch (e) {
@@ -531,6 +762,26 @@ export function getRuntimesStatus(): RuntimeStatus {
   const mlxPy = installedMlxPython();
   const mlxDir = installedMlxRuntimeDir();
   const mlxOk = mlxPy ? probeMlxPython(mlxPy) : false;
+  const linux = LINUX_RUNTIME_IDS.map((id) => {
+    const hit = installedLinuxRuntime(id);
+    return {
+      id,
+      installed: Boolean(hit),
+      path: hit?.bin ?? null,
+      tag: hit?.tag ?? readCurrentTag(id),
+      backend: linuxRuntimeBackend(id),
+    };
+  });
+  let gpu = null;
+  try {
+    gpu = getGpuInfo();
+  } catch {
+    gpu = null;
+  }
+  const recommendedLinuxId =
+    process.platform === "linux"
+      ? recommendedLinuxRuntimeId({ computeCaps: detectComputeCaps(), gpu })
+      : null;
   return {
     catalog: cat,
     llamacpp: {
@@ -543,6 +794,8 @@ export function getRuntimesStatus(): RuntimeStatus {
       python: mlxOk ? mlxPy : null,
       runtimePath: mlxOk ? mlxDir : null,
     },
+    linux,
+    recommendedLinuxId,
     platform: process.platform,
   };
 }
@@ -556,8 +809,20 @@ export function getRuntimeInstallJob(id: string): RuntimeInstallJob | null {
 }
 
 export async function startRuntimeInstall(runtimeId: RuntimeId): Promise<RuntimeInstallJob> {
-  if (process.platform !== "darwin") {
-    throw new Error("Runtime install is supported on macOS only");
+  const linux = isLinuxRuntimeId(runtimeId);
+  if (runtimeId === "mlx" && process.platform !== "darwin") {
+    throw new Error("MLX runtime install is macOS only");
+  }
+  if (runtimeId === "llamacpp" && process.platform !== "darwin") {
+    throw new Error("Metal llama.cpp runtime install is macOS only");
+  }
+  if (linux && process.platform === "darwin") {
+    throw new Error("Linux llama.cpp runtimes cannot be installed on macOS");
+  }
+  if (runtimeId === "llamacpp" || runtimeId === "mlx") {
+    if (process.platform !== "darwin") {
+      throw new Error("Runtime install is supported on macOS only");
+    }
   }
   if (activeJobId) {
     const active = jobs.get(activeJobId);
@@ -567,8 +832,11 @@ export async function startRuntimeInstall(runtimeId: RuntimeId): Promise<Runtime
   }
 
   const cat = loadRuntimeCatalog();
-  const bytesTotal =
-    runtimeId === "llamacpp" ? cat.llamacpp.sizeBytes : cat.mlxRuntime.sizeBytes;
+  const bytesTotal = linux
+    ? (cat.linux?.[runtimeId]?.sizeBytes ?? 0)
+    : runtimeId === "llamacpp"
+      ? cat.llamacpp.sizeBytes
+      : cat.mlxRuntime.sizeBytes;
 
   const id = randomUUID();
   const job: RuntimeInstallJob = {

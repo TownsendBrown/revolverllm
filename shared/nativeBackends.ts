@@ -54,8 +54,9 @@ export function packIsLinuxCuda(pack: BackendPackSpec): boolean {
 }
 
 /**
- * Most specific Linux CUDA pack whose matchComputeCaps hits any requested SM.
- * Darwin / non-linux → null (Metal is mac/, not backends/).
+ * Linux CUDA pack for native llama-server.
+ * One fat SKU (`linux-cuda`) — pick it on Linux. Darwin / non-linux → null
+ * (Metal is mac/, not backends/).
  */
 export function pickBackendPack(
   packs: BackendPackSpec[],
@@ -67,14 +68,16 @@ export function pickBackendPack(
   },
 ): BackendPackSpec | null {
   if (opts.os === "darwin") return null;
-  const pool = packs.filter((p) => packIsLinuxCuda(p));
+  const pool = packs
+    .filter((p) => packIsLinuxCuda(p))
+    .filter((p) => !opts.cpuArch || !p.cpuArch || p.cpuArch === opts.cpuArch);
   if (opts.forcePackId) {
     return pool.find((p) => p.id === opts.forcePackId) ?? null;
   }
+  if (pool.length === 1) return pool[0];
   if (!opts.computeCaps.length) return null;
   const hits = pool
     .filter((p) => packMatchesAnyCap(p, opts.computeCaps))
-    .filter((p) => !opts.cpuArch || !p.cpuArch || p.cpuArch === opts.cpuArch)
     .sort((a, b) => a.matchComputeCaps.length - b.matchComputeCaps.length);
   return hits[0] ?? null;
 }

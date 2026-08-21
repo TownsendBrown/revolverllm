@@ -16,8 +16,7 @@ const catalog: BackendCatalog = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "backends", "catalog.json"), "utf8"),
 );
 
-const sm70 = catalog.packs.find((p) => p.id === "linux-cuda-sm70") as BackendPackSpec;
-const pascal = catalog.packs.find((p) => p.id === "linux-cuda-pascal") as BackendPackSpec;
+const cuda = catalog.packs.find((p) => p.id === "linux-cuda") as BackendPackSpec;
 
 describe("parseComputeCap", () => {
   it("maps nvidia-smi dotted caps", () => {
@@ -33,42 +32,42 @@ describe("parseComputeCap", () => {
 });
 
 describe("pickBackendPack", () => {
-  it("catalog lists sm70 and pascal as linux cuda", () => {
-    assert.ok(sm70);
-    assert.ok(pascal);
-    assert.deepEqual(sm70.matchComputeCaps, [70]);
-    assert.deepEqual(pascal.matchComputeCaps, [60, 61]);
+  it("catalog lists one linux cuda fat pack", () => {
+    assert.ok(cuda);
+    assert.equal(catalog.packs.length, 1);
+    assert.ok(cuda.matchComputeCaps.includes(89));
+    assert.ok(cuda.matchComputeCaps.includes(70));
   });
 
-  it("picks sm70 for V100", () => {
-    const hit = pickBackendPack(catalog.packs, { os: "linux", computeCaps: [70] });
-    assert.equal(hit?.id, "linux-cuda-sm70");
-  });
-
-  it("picks pascal for P100 / GTX 1080", () => {
-    assert.equal(pickBackendPack(catalog.packs, { os: "linux", computeCaps: [60] })?.id, "linux-cuda-pascal");
-    assert.equal(pickBackendPack(catalog.packs, { os: "linux", computeCaps: [61] })?.id, "linux-cuda-pascal");
+  it("picks linux-cuda for any NVIDIA SM on linux", () => {
+    assert.equal(pickBackendPack(catalog.packs, { os: "linux", computeCaps: [70] })?.id, "linux-cuda");
+    assert.equal(pickBackendPack(catalog.packs, { os: "linux", computeCaps: [89] })?.id, "linux-cuda");
+    assert.equal(pickBackendPack(catalog.packs, { os: "linux", computeCaps: [61] })?.id, "linux-cuda");
   });
 
   it("does not pick a CUDA pack on macOS", () => {
     assert.equal(pickBackendPack(catalog.packs, { os: "darwin", computeCaps: [70] }), null);
   });
 
-  it("returns null when no pack covers the SM", () => {
-    assert.equal(pickBackendPack(catalog.packs, { os: "linux", computeCaps: [89] }), null);
-  });
-
   it("honors forcePackId", () => {
     const hit = pickBackendPack(catalog.packs, {
       os: "linux",
       computeCaps: [70],
-      forcePackId: "linux-cuda-pascal",
+      forcePackId: "linux-cuda",
     });
-    assert.equal(hit?.id, "linux-cuda-pascal");
+    assert.equal(hit?.id, "linux-cuda");
+    assert.equal(
+      pickBackendPack(catalog.packs, {
+        os: "linux",
+        computeCaps: [70],
+        forcePackId: "missing",
+      }),
+      null,
+    );
   });
 
   it("match helper", () => {
-    assert.equal(packMatchesAnyCap(sm70, [70, 89]), true);
-    assert.equal(packMatchesAnyCap(sm70, [60]), false);
+    assert.equal(packMatchesAnyCap(cuda, [70, 89]), true);
+    assert.equal(packMatchesAnyCap(cuda, [60]), false);
   });
 });

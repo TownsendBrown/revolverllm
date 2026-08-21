@@ -86,6 +86,19 @@ export interface VramEstimate {
 export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu" | "metal";
 export type GpuVendor = "nvidia" | "amd" | "intel" | "apple";
 
+export const LINUX_RUNTIME_IDS = ["linux-cuda", "linux-vulkan", "linux-cpu"] as const;
+
+export type LinuxRuntimeId = (typeof LINUX_RUNTIME_IDS)[number];
+export type RuntimeId = "llamacpp" | "mlx" | LinuxRuntimeId;
+
+export interface LinuxRuntimeInstallStatus {
+  id: LinuxRuntimeId;
+  installed: boolean;
+  path: string | null;
+  tag: string | null;
+  backend: InferenceBackend;
+}
+
 export interface GpuDevice {
   index: number;
   name: string;
@@ -414,8 +427,14 @@ export interface PlatformCapabilities {
   mlx: boolean;
   mlxError?: string;
   mlxPython?: string | null;
-  /** Installed CUDA pack id (e.g. linux-cuda-sm70). macOS Metal is not a pack. */
+  /** Installed CUDA pack id (linux-cuda). macOS Metal is not a pack. */
   nativeBackendPack?: string | null;
+  /** Linux downloadable SKUs (AppImage / native pack). */
+  nativeRuntimes?: LinuxRuntimeInstallStatus[];
+  /** Suggested Linux SKU from GPU compute cap / vendor. */
+  nativeRecommendedId?: LinuxRuntimeId | null;
+  /** nvidia-smi compute caps (70 = 7.0). Empty when no NVIDIA GPU. */
+  computeCaps?: number[];
   /** Default for new servers (REVOLVER_RUNTIME or pack:native extraMetadata). */
   defaultRuntime: ServerRuntimeMode;
   os: "darwin" | "linux" | "win32" | "other";
@@ -536,8 +555,6 @@ export interface StartModelDownloadRequest {
   files?: string[];
 }
 
-export type RuntimeId = "llamacpp" | "mlx";
-
 export type RuntimeInstallPhase =
   | "queued"
   | "download"
@@ -557,11 +574,14 @@ export interface RuntimeCatalogEntry {
   mlxVersion?: string;
   mlxEngineCommit?: string;
   minMacos?: string;
+  backend?: InferenceBackend;
+  matchComputeCaps?: number[];
 }
 
 export interface RuntimeCatalog {
   llamacpp: RuntimeCatalogEntry;
   mlx: RuntimeCatalogEntry;
+  linux: RuntimeCatalogEntry[];
 }
 
 export interface RuntimeStatus {
@@ -576,6 +596,8 @@ export interface RuntimeStatus {
     python: string | null;
     runtimePath: string | null;
   };
+  linux: LinuxRuntimeInstallStatus[];
+  recommendedLinuxId: LinuxRuntimeId | null;
   platform: NodeJS.Platform;
 }
 

@@ -45,3 +45,26 @@ jobs:
         run: |
           test -d release/linux-unpacked
           find release/linux-unpacked -name 'better_sqlite3.node' | grep -q .
+
+  pack-native:
+    runs-on: ubuntu-latest
+    needs: [test, test-native]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run pack:native:dir
+      - name: Smoke-check native unpacked app
+        run: |
+          APP=release-native/linux-unpacked
+          test -d "$APP"
+          test -f "$APP/resources/runtimes/catalog.json"
+          node -e 'const c=require("./release-native/linux-unpacked/resources/runtimes/catalog.json"); if (c.schemaVersion!==3) process.exit(1); if (!c.linux["linux-cuda"]||!c.linux["linux-vulkan"]||!c.linux["linux-cpu"]) process.exit(1)'
+          if find "$APP" -name 'llama-server' | grep -q .; then
+            echo "llama-server must not be bundled in the AppImage" >&2
+            find "$APP" -name 'llama-server'
+            exit 1
+          fi

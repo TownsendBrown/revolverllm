@@ -182,11 +182,29 @@ export function resolveInstalledBackendPack(opts?: {
   return null;
 }
 
+export function stripAppImageLibDirs(ldPath: string | undefined, appDir?: string): string[] {
+  const prefix = appDir ?? process.env.APPDIR;
+  return (ldPath ?? "")
+    .split(":")
+    .filter(Boolean)
+    .filter((p) => {
+      if (prefix && (p === prefix || p.startsWith(`${prefix}/`))) return false;
+      if (p.includes("/.mount_")) return false;
+      return true;
+    });
+}
+
 export function mergeLibPath(env: NodeJS.ProcessEnv, libDir?: string | null): NodeJS.ProcessEnv {
-  if (!libDir) return env;
-  const prev = env.LD_LIBRARY_PATH ?? "";
+  const cleaned = stripAppImageLibDirs(env.LD_LIBRARY_PATH);
+  const parts = libDir ? [libDir, ...cleaned.filter((p) => p !== libDir)] : cleaned;
+  if (!parts.length) {
+    if (!env.LD_LIBRARY_PATH) return env;
+    const next = { ...env };
+    delete next.LD_LIBRARY_PATH;
+    return next;
+  }
   return {
     ...env,
-    LD_LIBRARY_PATH: prev ? `${libDir}:${prev}` : libDir,
+    LD_LIBRARY_PATH: parts.join(":"),
   };
 }

@@ -51,6 +51,8 @@ export type {
   DownloadJob,
   StartModelDownloadRequest,
   RuntimeId,
+  LinuxRuntimeId,
+  LinuxRuntimeInstallStatus,
   RuntimeInstallJob,
   RuntimeStatus,
 } from "../shared/types";

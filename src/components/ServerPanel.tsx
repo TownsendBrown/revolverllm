@@ -28,6 +28,8 @@ import {
   validateBackendDevices,
   vendorLabel,
 } from "../../shared/gpuDevices";
+import { formatRuntimeIdLabel, linuxRuntimeBackend, nativeSkuBlock } from "../../shared/nativeRuntimeMatch";
+import type { LinuxRuntimeId, LinuxRuntimeInstallStatus } from "../../shared/types";
 
 type Props = {
   models: CatalogModel[];
@@ -39,6 +41,7 @@ type Props = {
   onRefresh: () => void;
   onError: (msg: string) => void;
   onServerReady?: (serverId: string) => void;
+  onOpenRuntimes?: () => void;
 };
 
 type View = "list" | "wizard" | "detail";
@@ -59,25 +62,24 @@ function initialWizardRuntime(opts: {
   native: boolean;
   docker: boolean;
 }): ServerRuntimeMode {
-  if (opts.defaultRuntime === "native" && opts.native) return "native";
+  if (opts.defaultRuntime === "native") return "native";
   if (opts.native && !opts.docker) return "native";
   return "docker";
 }
 
-function availableBackends(hostOs: string, macMetal: boolean, dockerGpu: boolean) {
-  // macOS has no CUDA / ROCm / Vulkan runtime — Metal or CPU only.
+function availableBackends(
+  hostOs: string,
+  macMetal: boolean,
+  dockerGpu: boolean,
+  nativeOnly: boolean,
+) {
   if (hostOs === "darwin") return BACKENDS.filter((b) => b.id === "metal" || b.id === "cpu");
+  if (nativeOnly) {
+    return BACKENDS.filter((b) => b.id === "cuda" || b.id === "vulkan" || b.id === "cpu");
+  }
   if (macMetal && !dockerGpu) return BACKENDS.filter((b) => !DOCKER_GPU_BACKENDS.has(b.id));
   if (dockerGpu) return BACKENDS.filter((b) => b.id !== "metal");
   return BACKENDS.filter((b) => b.id !== "metal");
-}
-
-function defaultWizardBackend(
-  macMetal: boolean,
-  dockerGpu: boolean,
-  gpu: GpuInfo | null,
-): InferenceBackend {
-  return recommendedWizardBackend(macMetal, dockerGpu, gpu);
 }
 
 const phaseLabel: Record<string, string> = {
@@ -193,6 +195,7 @@ export default function ServerPanel({
   onRefresh,
   onError,
   onServerReady,
+  onOpenRuntimes,
 }: Props) {
   const [view, setView] = useState<View>("list");
   const [wizardStep, setWizardStep] = useState<WizardStep>("backend");
@@ -212,6 +215,9 @@ export default function ServerPanel({
   const [mlxError, setMlxError] = useState<string | undefined>();
   const [hostOs, setHostOs] = useState<string>("other");
   const [defaultRuntime, setDefaultRuntime] = useState<ServerRuntimeMode>("docker");
+  const [nativeRuntimes, setNativeRuntimes] = useState<LinuxRuntimeInstallStatus[]>([]);
+  const [nativeRecommendedId, setNativeRecommendedId] = useState<LinuxRuntimeId | null>(null);
+  const [computeCaps, setComputeCaps] = useState<number[]>([]);
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
   const [selectedModel, setSelectedModel] = useState("");
@@ -235,10 +241,16 @@ export default function ServerPanel({
   // On macOS the native supervisor spawns llama-server / MLX with Metal
   // directly, so Metal is available with or without the host agent.
   const metalHost = macMetal || hostOs === "darwin";
+  const nativeOnly = defaultRuntime === "native" && hostOs === "linux";
+  const installedLinuxIds = useMemo(
+    () => nativeRuntimes.filter((s) => s.installed).map((s) => s.id),
+    [nativeRuntimes],
+  );
+  const anyLinuxSku = installedLinuxIds.length > 0;
 
   const wizardBackends = useMemo(
-    () => availableBackends(hostOs, macMetal, dockerGpu),
-    [hostOs, macMetal, dockerGpu],
+    () => availableBackends(hostOs, macMetal, dockerGpu, nativeOnly),
+    [hostOs, macMetal, dockerGpu, nativeOnly],
   );
 
   const compatibleGpus = useMemo(
@@ -251,15 +263,21 @@ export default function ServerPanel({
     [backend, gpu],
   );
 
-  const backendBlock = useMemo(
-    () => validateBackendDevices(backend, gpu?.devices ?? []),
-    [backend, gpu],
-  );
+  const backendBlock = useMemo(() => {
+    if (nativeOnly) {
+      return nativeSkuBlock(backend, {
+        installed: installedLinuxIds,
+        computeCaps,
+        devices: gpu?.devices ?? [],
+      });
+    }
+    return validateBackendDevices(backend, gpu?.devices ?? []);
+  }, [backend, gpu, nativeOnly, installedLinuxIds, computeCaps]);
 
-  const recBackend = useMemo(
-    () => recommendedWizardBackend(metalHost, dockerGpu, gpu),
-    [metalHost, dockerGpu, gpu],
-  );
+  const recBackend = useMemo(() => {
+    if (nativeOnly && nativeRecommendedId) return linuxRuntimeBackend(nativeRecommendedId);
+    return recommendedWizardBackend(metalHost, dockerGpu, gpu);
+  }, [nativeOnly, nativeRecommendedId, metalHost, dockerGpu, gpu]);
 
   const refreshServers = useCallback(async () => {
     const list = await api.listServers();
@@ -285,6 +303,9 @@ export default function ServerPanel({
         setMlxAvailable(p.mlx);
         setMlxError(p.mlxError);
         setHostOs(p.os);
+        setNativeRuntimes(p.nativeRuntimes ?? []);
+        setNativeRecommendedId(p.nativeRecommendedId ?? null);
+        setComputeCaps(p.computeCaps ?? []);
         const next =
           p.os === "darwin"
             ? "native"
@@ -306,11 +327,37 @@ export default function ServerPanel({
   }, [metalHost, dockerGpu, backend]);
 
   useEffect(() => {
-    const err = validateBackendDevices(backend, gpu?.devices ?? []);
+    const err = nativeOnly
+      ? nativeSkuBlock(backend, {
+          installed: installedLinuxIds,
+          computeCaps,
+          devices: gpu?.devices ?? [],
+        })
+      : validateBackendDevices(backend, gpu?.devices ?? []);
     if (!err) return;
-    const rec = recommendedWizardBackend(metalHost, dockerGpu, gpu);
-    if (rec !== backend) setBackend(rec);
-  }, [backend, gpu, metalHost, dockerGpu]);
+    const rec =
+      nativeOnly && nativeRecommendedId
+        ? linuxRuntimeBackend(nativeRecommendedId)
+        : recommendedWizardBackend(metalHost, dockerGpu, gpu);
+    if (rec === backend) return;
+    const recErr = nativeOnly
+      ? nativeSkuBlock(rec, {
+          installed: installedLinuxIds,
+          computeCaps,
+          devices: gpu?.devices ?? [],
+        })
+      : validateBackendDevices(rec, gpu?.devices ?? []);
+    if (!recErr) setBackend(rec);
+  }, [
+    backend,
+    gpu,
+    metalHost,
+    dockerGpu,
+    nativeOnly,
+    nativeRecommendedId,
+    installedLinuxIds,
+    computeCaps,
+  ]);
 
   useEffect(() => {
     if (backend === "cpu" || backend === "metal") {
@@ -428,9 +475,8 @@ export default function ServerPanel({
 
   const resetWizard = () => {
     setWizardStep("backend");
-    setBackend(defaultWizardBackend(metalHost, dockerGpu, gpu));
-    const rec = recommendedWizardBackend(metalHost, dockerGpu, gpu);
-    const pool = devicesForBackend(gpu?.devices ?? [], rec);
+    setBackend(recBackend);
+    const pool = devicesForBackend(gpu?.devices ?? [], recBackend);
     setGpuDevices(pool[0] != null ? [pool[0].index] : []);
     setGpuMode("single");
     setRuntime(defaultRuntime);
@@ -442,6 +488,18 @@ export default function ServerPanel({
     setServerName("");
     setGuardrailBlock("");
     setVram(null);
+  };
+
+  const openRuntimes = () => onOpenRuntimes?.();
+
+  const installRecommended = async () => {
+    const id = nativeRecommendedId ?? "linux-cpu";
+    try {
+      await api.installRuntime(id);
+    } catch (e) {
+      onError(String(e));
+    }
+    openRuntimes();
   };
 
   const openWizard = () => {
@@ -480,6 +538,7 @@ export default function ServerPanel({
     if (wizardStep === "backend") {
       if (backendBlock) return false;
       if (backend === "metal") return true;
+      if (nativeOnly) return true;
       if (runtime === "native") return nativeAvailable;
       return dockerAvailable;
     }
@@ -498,6 +557,7 @@ export default function ServerPanel({
       return true;
     }
     if (wizardStep === "config") return true;
+    if (nativeOnly && backendBlock) return false;
     return !validateBackendDevices(backend, gpu?.devices ?? [], gpuDevices);
   };
 
@@ -612,7 +672,13 @@ export default function ServerPanel({
               <p className="muted">Pick inference backend for this server.</p>
               <div className="backend-grid">
                 {wizardBackends.map((b) => {
-                  const blocked = validateBackendDevices(b.id, gpu?.devices ?? []);
+                  const blocked = nativeOnly
+                    ? nativeSkuBlock(b.id, {
+                        installed: installedLinuxIds,
+                        computeCaps,
+                        devices: gpu?.devices ?? [],
+                      })
+                    : validateBackendDevices(b.id, gpu?.devices ?? []);
                   return (
                   <button
                     key={b.id}
@@ -633,7 +699,7 @@ export default function ServerPanel({
                   );
                 })}
               </div>
-              {backend !== "metal" && hostOs !== "darwin" && (
+              {backend !== "metal" && hostOs !== "darwin" && defaultRuntime !== "native" && (
                 <>
                   <p className="muted" style={{ marginTop: "1.25rem" }}>
                     How to run llama-server
@@ -1122,10 +1188,39 @@ export default function ServerPanel({
         {servers.length === 0 ? (
           <div className="empty-state">
             <p>No servers yet.</p>
-            <p className="muted">Create a server to load a model (Docker container or native llama-server).</p>
-            <button className="primary" onClick={openWizard}>
-              New server
-            </button>
+            {nativeOnly && !anyLinuxSku ? (
+              <>
+                <p className="muted">
+                  Install a llama.cpp runtime before creating a server. Recommended:{" "}
+                  {formatRuntimeIdLabel(nativeRecommendedId ?? "linux-cpu")}.
+                </p>
+                <div className="banner warn inline">
+                  No runtime installed. Config → Manage runtimes.
+                </div>
+                <p>
+                  <button className="primary" onClick={() => void installRecommended()}>
+                    Install recommended
+                  </button>{" "}
+                  <button className="ghost" onClick={openRuntimes}>
+                    Manage runtimes
+                  </button>{" "}
+                  <button className="ghost" onClick={openWizard}>
+                    New server
+                  </button>
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="muted">
+                  {nativeOnly
+                    ? "Create a server to load a model (native llama-server)."
+                    : "Create a server to load a model (Docker container or native llama-server)."}
+                </p>
+                <button className="primary" onClick={openWizard}>
+                  New server
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <div className="server-grid">

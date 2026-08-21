@@ -27,6 +27,10 @@ import { removeServerRuntime } from "./serverRuntime";
 import { InstanceRuntime } from "./instanceRuntime";
 import { probeNativeRuntime } from "./llamaServerBin";
 import { probeMlxRuntime } from "./mlxServerBin";
+import { getRuntimesStatus } from "./runtimeInstaller";
+import { detectComputeCaps } from "./nativeBackends";
+import { nativeSkuBlock } from "../shared/nativeRuntimeMatch";
+import { getGpuInfoAsync } from "./platformGpu";
 import {
   buildGatewayModelEntries,
   resolveGatewayRouteFromEntries,
@@ -162,8 +166,19 @@ export const serverManager = {
         const mlx = probeMlxRuntime();
         if (!mlx.available) throw new Error(mlx.error ?? "mlx-engine runtime is not available");
       } else {
-        const probe = probeNativeRuntime();
+        const probe = probeNativeRuntime(undefined, { backend: req.backend });
         if (!probe.available) throw new Error(probe.error ?? "Native llama-server is not available");
+        if (process.platform === "linux") {
+          const rt = getRuntimesStatus();
+          const installed = rt.linux.filter((s) => s.installed).map((s) => s.id);
+          const gpu = await getGpuInfoAsync();
+          const err = nativeSkuBlock(req.backend, {
+            installed,
+            computeCaps: detectComputeCaps(),
+            devices: gpu.devices,
+          });
+          if (err) throw new Error(err);
+        }
       }
     }
 

@@ -106,17 +106,15 @@ if [ -n "$FOUND" ]; then
   mkdir -p "$DEST_DIR"
   ln -sfn "$FOUND" "$DEST"
   echo "Linked $FOUND"
-  echo "    -> $DEST  (not a Revolver pack — prefer ./backends/build.sh sm70)"
+  echo "    -> $DEST  (not a Revolver pack — prefer ./backends/build.sh linux-cuda)"
   "$DEST" --version 2>/dev/null || true
   exit 0
 fi
 
 echo "No llama-server and no backend pack." >&2
 echo >&2
-echo "Build the Volta (V100 / sm_70) pack:" >&2
-echo "  ./backends/build.sh sm70" >&2
-echo "Pascal (P100 / GTX 10xx):" >&2
-echo "  ./backends/build.sh pascal" >&2
+echo "Build the CUDA pack:" >&2
+echo "  ./backends/build.sh linux-cuda" >&2
 echo "Then re-run: npm run install:llama-server" >&2
 echo "Or set LLAMA_SERVER_BIN=/path/to/llama-server" >&2
 exit 1

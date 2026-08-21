@@ -14,6 +14,7 @@ import {
 import { mlxEnvFileName } from "../engines/mlx/docker";
 import { mlxTokenizerPresent } from "../shared/hubDownloadFiles";
 import { parseLoadEnv } from "../shared/loadEnvFile";
+import type { InferenceBackend } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -212,7 +213,8 @@ export class NativeSupervisor {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } else {
-      const resolved = resolveLlamaServerBin(this.opts.llamaServerBin);
+      const backend = (fileEnv.BACKEND ?? process.env.BACKEND ?? "cpu") as InferenceBackend;
+      const resolved = resolveLlamaServerBin(this.opts.llamaServerBin, { backend });
       if (!resolved.bin) {
         rec.status = "crashed";
         appendLog(rec, `[native] ${resolved.error}`);

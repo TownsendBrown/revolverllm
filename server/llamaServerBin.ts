@@ -2,8 +2,9 @@ import { accessSync, constants, existsSync, readdirSync } from "fs";
 import { delimiter, join } from "path";
 import { homedir } from "os";
 import { inComposeBackend } from "../shared/runtimeMode";
+import type { InferenceBackend } from "../shared/types";
 import { resolveInstalledBackendPack, type NativeBackendResolve } from "./nativeBackends";
-import { installedLlamaServerBin } from "./runtimeInstaller";
+import { installedLlamaServerBin, listInstalledLinuxRuntimes, resolveLinuxLlamaServer } from "./runtimeInstaller";
 
 export interface LlamaServerResolve {
   bin: string | null;
@@ -73,13 +74,18 @@ export interface ResolveLlamaServerOpts {
   skipPacks?: boolean;
   platform?: NodeJS.Platform;
   home?: string;
+  backend?: InferenceBackend;
+  computeCaps?: number[];
 }
 
 function missingBinError(): string {
   if (process.platform === "darwin") {
     return "llama.cpp runtime not installed — install it from Setup runtimes (downloads the Metal build from GitHub releases).";
   }
-  return "llama-server not found. Build a CUDA pack: ./backends/build.sh sm70 — then npm run install:llama-server. Or set LLAMA_SERVER_BIN.";
+  if (listInstalledLinuxRuntimes().length === 0) {
+    return "llama.cpp runtime not installed — install one from Config → Manage runtimes.";
+  }
+  return "llama-server not found. Install a matching runtime in Config → Manage runtimes, or set LLAMA_SERVER_BIN.";
 }
 
 export function resolveLlamaServerBin(
@@ -96,6 +102,15 @@ export function resolveLlamaServerBin(
   }
 
   const platform = opts?.platform ?? process.platform;
+  if (platform === "linux" && !opts?.skipPacks) {
+    const linux = resolveLinuxLlamaServer({
+      backend: opts?.backend,
+      computeCaps: opts?.computeCaps,
+    });
+    if (linux) {
+      return { bin: linux.bin, libDir: linux.libDir, packId: linux.id };
+    }
+  }
   if (platform !== "darwin" && !opts?.skipPacks) {
     const pack = opts?.pack !== undefined ? opts.pack : resolveInstalledBackendPack({ platform });
     if (pack) {

@@ -25,6 +25,8 @@ import * as benchmarkRunner from "./benchmarkRunner";
 import { defaultRuntimeMode, inComposeBackend } from "../shared/runtimeMode";
 import { dockerHealth } from "./containerUtils";
 import { probeNativeRuntime } from "./llamaServerBin";
+import { detectComputeCaps } from "./nativeBackends";
+import { nativeSkuBlock } from "../shared/nativeRuntimeMatch";
 import { probeMlxRuntime } from "./mlxServerBin";
 import type { BenchmarkCategory } from "../shared/benchmarks/types";
 import { loadSettings, saveSettings, jitStatusFromConfig } from "../electron/lib/settings";
@@ -280,6 +282,8 @@ export const handlers = {
     const native = probeNativeRuntime();
     const mlx = probeMlxRuntime();
     const compose = inComposeBackend();
+    const rt = getRuntimesStatus();
+    const computeCaps = process.platform === "linux" ? detectComputeCaps() : [];
     return {
       host: compose ? ("compose" as const) : ("electron" as const),
       pathSettingsLocked: compose,
@@ -291,6 +295,9 @@ export const handlers = {
       nativeError: native.error,
       llamaServerBin: native.bin,
       nativeBackendPack: native.packId ?? null,
+      nativeRuntimes: rt.linux,
+      nativeRecommendedId: rt.recommendedLinuxId,
+      computeCaps,
       mlx: mlx.available,
       mlxError: mlx.error,
       mlxPython: mlx.python,

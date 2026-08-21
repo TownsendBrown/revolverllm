@@ -7,6 +7,7 @@ import {
   type RevolverSettingsView,
 } from "../revolver";
 import { vendorLabel } from "../../shared/gpuDevices";
+import { linuxRuntimeCards, RuntimeCardGrid, useRuntimeInstalls } from "./RuntimeCards";
 
 type Props = {
   config: RevolverConfig | null;
@@ -21,6 +22,49 @@ type Props = {
 
 function gb(n: number) {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function LinuxRuntimeManager() {
+  const { status, jobs, error, install, activeJob } = useRuntimeInstalls();
+  if (!status) {
+    return error ? (
+      <section className="panel" id="manage-runtimes">
+        <h3>Manage runtimes</h3>
+        <div className="banner error inline">{error}</div>
+      </section>
+    ) : null;
+  }
+  const cards = linuxRuntimeCards(status);
+  const rec = cards.find((c) => c.recommended);
+  return (
+    <section className="panel" id="manage-runtimes">
+      <h3>Manage runtimes</h3>
+      <p className="muted small">
+        Download llama.cpp engines from GitHub releases. Install at least one before starting a
+        native server. NVIDIA driver required for CUDA; Mesa + <code>/dev/dri</code> for Vulkan.
+      </p>
+      {error && <div className="banner error inline">{error}</div>}
+      {rec && !rec.installed && (
+        <p className="muted small">
+          Recommended for this machine: <strong>{rec.label}</strong>{" "}
+          <button
+            type="button"
+            className="primary"
+            disabled={Boolean(activeJob)}
+            onClick={() => void install(rec.id)}
+          >
+            Install recommended
+          </button>
+        </p>
+      )}
+      <RuntimeCardGrid
+        cards={cards}
+        jobs={jobs}
+        busy={Boolean(activeJob)}
+        onInstall={(id) => void install(id)}
+      />
+    </section>
+  );
 }
 
 export default function ConfigPanel({
@@ -387,7 +431,9 @@ export default function ConfigPanel({
         </>
       )}
 
-      {platform && (
+      {platform && platform.os === "linux" && <LinuxRuntimeManager />}
+
+      {platform && platform.os !== "linux" && (
         <section className="panel">
           <h3>Runtime</h3>
           <p className="muted small">

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# CUDA Pascal sm_60/sm_61 (P100, P40, GTX 10-series) — Linux Electron.
+# CUDA 12 fat pack (Turing–Hopper) — Linux Electron. One SKU, LMS-style.
 set -euo pipefail
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)"
 export REPO_ROOT
-export PACK_ID="${PACK_ID:-linux-cuda-pascal}"
+export PACK_ID="${PACK_ID:-linux-cuda}"
 export CATALOG="${CATALOG:-$REPO_ROOT/backends/catalog.json}"
+# Portable AVX2, not -march=native (GitHub-release binary).
+export GGML_NATIVE="${GGML_NATIVE:-OFF}"
 # shellcheck source=../../lib/common.sh
 . "$REPO_ROOT/backends/lib/common.sh"
 
@@ -14,7 +16,7 @@ if [ "${1:-}" = "--docker" ]; then
 fi
 
 if [ "$(uname -s)" = "Darwin" ]; then
-  echo "linux-cuda-pascal is a Linux pack. macOS: mac/scripts/install-llama-server.sh" >&2
+  echo "linux-cuda is a Linux pack. macOS: mac/scripts/install-llama-server.sh" >&2
   exit 1
 fi
 

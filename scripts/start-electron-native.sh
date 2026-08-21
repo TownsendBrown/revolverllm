@@ -1,6 +1,6 @@
 #!/bin/sh
 # Launch Electron with native llama-server (no Docker inference).
-# Linux: prefers Revolver CUDA packs under backends/dist or ~/.revolver/backends.
+# Linux: prefers installed GitHub SKUs, then backends/dist or ~/.revolver/backends.
 # macOS: use npm run start:macos (Metal).
 # Usage: scripts/start-electron-native.sh [--dev]
 set -e
@@ -51,7 +51,7 @@ resolve_llama_bin() {
 BIN="$(resolve_llama_bin || true)"
 if [ -z "$BIN" ]; then
   echo "llama-server not found." >&2
-  echo "  ./backends/build.sh sm70 && npm run install:llama-server" >&2
+  echo "  ./backends/build.sh linux-cuda && npm run install:llama-server" >&2
   echo "  # or: export LLAMA_SERVER_BIN=/path/to/llama-server" >&2
   exit 1
 fi

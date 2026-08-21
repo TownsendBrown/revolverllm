@@ -93,7 +93,7 @@ vLLM / vLLM Pascal stay Docker-only.
 ```
   Node.js 22+          npm
   Docker               (optional for Electron llama.cpp — required for Compose and vLLM)
-  llama-server         (optional — native runtime; Linux: ./backends/build.sh sm70 · macOS: brew install llama.cpp)
+  llama-server         (optional — native runtime; Linux: Config → Manage runtimes or ./backends/build.sh linux-cuda · macOS: brew install llama.cpp)
   NVIDIA Container Toolkit   (optional — GPU overlay for Compose)
   GGUF models          on disk under a known directory
 ```
@@ -199,15 +199,13 @@ npm start            # production build + Electron
 
 **Native llama.cpp (no Docker)**
 
-Linux CUDA packs live in `backends/` (Volta sm_70 first; Pascal sm_60/61 same layout). macOS Metal stays in `mac/` — not these packs.
+Linux CUDA pack lives in `backends/` (one fat CUDA 12 SKU). macOS Metal stays in `mac/` — not this pack.
 
 ```bash
-./backends/build.sh sm70              # Tesla V100 / sm_70
+./backends/build.sh linux-cuda        # Turing–Hopper + Volta sm_70
 npm run install:llama-server          # copy pack → ~/.revolver/backends/
 npm run start:native
 ```
-
-Pascal (P100 / GTX 10xx): `./backends/build.sh pascal`
 
 Or point at a binary:
 
@@ -216,9 +214,9 @@ export LLAMA_SERVER_BIN=/path/to/llama-server
 npm run start:native
 ```
 
-vLLM still needs Docker. `pack:native` bundles any staged `backends/dist/*` into extraResources; it does not download llama.cpp.
+vLLM still needs Docker. `pack:native` is a thin AppImage (catalog only, no bundled llama-server). Install CUDA / Vulkan / CPU SKUs from Config → Manage runtimes (GitHub `runtimes-v*` release). Host deps: NVIDIA driver for CUDA; Mesa + `video`/`render` + `/dev/dri` for Vulkan. Do not bundle `libcuda` or ICDs.
 
-See [backends/README.md](backends/README.md).
+See [backends/README.md](backends/README.md). Build CUDA, then `scripts/pack-linux-runtime.sh linux-cuda` (and vulkan/cpu) and upload onto `runtimes-v1`.
 
 **3. Package (Linux)**
 
@@ -236,7 +234,7 @@ npm run pack:native    # AppImage + deb → release-native/ (native default)
                           └── revolver_*_amd64.deb
 ```
 
-`pack:native` writes `revolverRuntime=native` into the packaged `package.json` so new servers default to host `llama-server` even when Docker is installed. Staged `backends/dist/*` packs are copied into extraResources.
+`pack:native` writes `revolverRuntime=native` into the packaged `package.json` so new servers default to host `llama-server`. `runtimes/catalog.json` ships via package.json extraResources (do not pass `-c.extraResources` on the CLI — that drops the catalog). Engines download on demand; llama-server is not inside the AppImage.
 
 On first launch, Electron detects GPU and stores llama config under `data/llama-config/`. Docker servers spawn `revolver-server-<id>` on the host daemon. Native servers spawn `llama-server` on `127.0.0.1:<hostPort>` with host `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` (no Docker index remapping). Two servers on GPU 0 and GPU 1 is the supported parallel layout; overlapping GPUs are rejected unless you pass `force`.
 
@@ -329,12 +327,12 @@ docker compose down
 | `npm run start` | Production build + Electron |
 | `npm run start:native` | Production Electron with native llama-server (no Docker) |
 | `npm run install:llama-server` | Install Linux CUDA pack into `~/.revolver/backends/` (macOS: `mac/scripts/install-llama-server.sh`) |
-| `npm run backend:build:sm70` | Build Volta sm_70 `llama-server` pack → `backends/dist/` |
-| `npm run backend:build:pascal` | Build Pascal sm_60/61 pack → `backends/dist/` |
+| `npm run backend:build:cuda` | Build CUDA fat `llama-server` pack → `backends/dist/` |
 | `npm run start:macos` | Electron + Metal host agent |
 | `npm run pack` | Linux AppImage + deb → `release/` |
-| `npm run pack:native` | Linux AppImage + deb → `release-native/` (native default) |
+| `npm run pack:native` | Linux AppImage + deb → `release-native/` (native default, catalog only) |
 | `npm run pack:native:dir` | Unpacked native Electron dir |
+| `scripts/pack-linux-runtime.sh <id>` | Tar/hash a Linux SKU; print catalog snippet for `runtimes-v*` |
 | `npm run server` | Standalone Express backend |
 | `npm run test` | Unit tests |
 | `npm run test:native` | Native process supervisor + multi-GPU claim tests (mock llama-server) |

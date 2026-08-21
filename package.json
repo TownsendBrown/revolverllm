@@ -2,6 +2,7 @@
   "name": "revolver",
   "version": "0.2.0",
   "description": "Local model manager for GGUF files",
+  "author": "TownsendBrown <179747422+TownsendBrown@users.noreply.github.com>",
   "license": "MIT",
   "main": "dist-electron/main.js",
   "private": true,
@@ -17,8 +18,7 @@
     "start:native": "scripts/start-electron-native.sh",
     "dev:native": "scripts/start-electron-native.sh --dev",
     "install:llama-server": "scripts/install-llama-server.sh",
-    "backend:build:sm70": "bash backends/linux/cuda-sm70/build.sh",
-    "backend:build:pascal": "bash backends/linux/cuda-pascal/build.sh",
+    "backend:build:cuda": "bash backends/linux/cuda/build.sh",
     "pack": "npm run rebuild:native && npm run build && electron-builder --linux",
     "pack:dir": "npm run rebuild:native && npm run build && electron-builder --linux dir",
     "pack:native": "scripts/pack-electron-native.sh",
@@ -68,7 +68,8 @@
         "deb"
       ],
       "category": "Development",
-      "synopsis": "Local model manager for GGUF files"
+      "synopsis": "Local model manager for GGUF files",
+      "maintainer": "TownsendBrown <179747422+TownsendBrown@users.noreply.github.com>"
     }
   },
   "dependencies": {

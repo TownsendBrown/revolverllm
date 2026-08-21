@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "llamacpp": {
     "repo": "ggml-org/llama.cpp",
     "tag": "b10453",
@@ -19,5 +19,41 @@
     "minMacos": "14.0",
     "mlxEngineCommit": "ec2f585ae8a48cf9ffe09baf469d76be317db288",
     "pythonVersion": "3.11.15"
+  },
+  "linux": {
+    "linux-cuda": {
+      "label": "CUDA llama.cpp",
+      "backend": "cuda",
+      "tag": "b10453",
+      "asset": "linux-cuda-b10453.tar.gz",
+      "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/linux-cuda-b10453.tar.gz",
+      "sha256": "0b0a923b3828185d3e0eb43d5a0c463f742cfb93fc687e565e12ba5a1414dcfa",
+      "sizeBytes": 724353600,
+      "unpackDir": ".",
+      "binary": "bin/llama-server",
+      "libDir": "lib"
+    },
+    "linux-vulkan": {
+      "label": "Vulkan llama.cpp",
+      "backend": "vulkan",
+      "tag": "b10453",
+      "asset": "llama-b10453-bin-ubuntu-vulkan-x64.tar.gz",
+      "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/llama-b10453-bin-ubuntu-vulkan-x64.tar.gz",
+      "sha256": "73d52b2626927cb9cb7a5d82b850c52d823ad358d62b77f7376c54e8767a77f9",
+      "sizeBytes": 33256666,
+      "unpackDir": "llama-b10453",
+      "binary": "llama-server"
+    },
+    "linux-cpu": {
+      "label": "CPU llama.cpp",
+      "backend": "cpu",
+      "tag": "b10453",
+      "asset": "llama-b10453-bin-ubuntu-x64.tar.gz",
+      "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/llama-b10453-bin-ubuntu-x64.tar.gz",
+      "sha256": "550eb155a09c3051c7add5becf6d0badc3a4c33416807985963036b27b859fb4",
+      "sizeBytes": 16645691,
+      "unpackDir": "llama-b10453",
+      "binary": "llama-server"
+    }
   }
 }

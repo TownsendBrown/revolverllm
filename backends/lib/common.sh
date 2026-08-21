@@ -4,33 +4,30 @@
 set -euo pipefail
 
 catalog_json() {
-  CATALOG="${CATALOG}" PACK_ID="${PACK_ID}" node -e '
-    const cat = require(process.env.CATALOG);
-    const id = process.env.PACK_ID;
-    const pack = (cat.packs || []).find((p) => p.id === id);
-    if (!pack) {
-      console.error("unknown pack id: " + id);
-      process.exit(1);
-    }
-    process.stdout.write(JSON.stringify({
-      llamaCppRepo: cat.llamaCppRepo,
-      llamaCppTag: process.env.LLAMA_CPP_REF || cat.llamaCppTag,
-      ...pack,
-    }));
-  '
+  CATALOG="${CATALOG}" PACK_ID="${PACK_ID}" python3 - <<'PY'
+import json, os, sys
+cat = json.load(open(os.environ["CATALOG"]))
+pid = os.environ["PACK_ID"]
+pack = next((p for p in cat.get("packs") or [] if p.get("id") == pid), None)
+if not pack:
+    print("unknown pack id: " + pid, file=sys.stderr)
+    sys.exit(1)
+out = dict(pack)
+out["llamaCppRepo"] = cat["llamaCppRepo"]
+out["llamaCppTag"] = os.environ.get("LLAMA_CPP_REF") or cat["llamaCppTag"]
+sys.stdout.write(json.dumps(out))
+PY
 }
 
 pack_field() {
-  catalog_json | node -e '
-    let raw = "";
-    process.stdin.on("data", (c) => { raw += c; });
-    process.stdin.on("end", () => {
-      const p = JSON.parse(raw);
-      const v = p[process.argv[1]];
-      if (v == null) process.exit(3);
-      process.stdout.write(Array.isArray(v) ? v.join(",") : String(v));
-    });
-  ' "$1"
+  catalog_json | python3 -c '
+import json, sys
+p = json.load(sys.stdin)
+v = p.get(sys.argv[1])
+if v is None:
+    sys.exit(3)
+sys.stdout.write(",".join(str(x) for x in v) if isinstance(v, list) else str(v))
+' "$1"
 }
 
 pick_tool() {
@@ -103,10 +100,10 @@ ensure_llama_src() {
   src="${LLAMA_CPP_SRC:-$REPO_ROOT/backends/src/llama.cpp}"
   mkdir -p "$(dirname "$src")"
   if [ ! -d "$src/.git" ]; then
-    echo "[backend] cloning llama.cpp ($tag) → $src"
+    echo "[backend] cloning llama.cpp ($tag) → $src" >&2
     git clone --depth 1 --branch "$tag" "$repo" "$src"
   else
-    echo "[backend] llama.cpp checkout $src"
+    echo "[backend] llama.cpp checkout $src" >&2
     git -C "$src" fetch --tags --depth 1 origin "$tag"
     git -C "$src" checkout --force "$tag"
   fi
@@ -161,32 +158,29 @@ write_manifest() {
   local commit="$2"
   local built_at
   built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  CATALOG="$CATALOG" PACK_ID="$PACK_ID" DEST="$dest" COMMIT="$commit" BUILT_AT="$built_at" node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const cat = require(process.env.CATALOG);
-    const pack = (cat.packs || []).find((p) => p.id === process.env.PACK_ID);
-    const manifest = {
-      id: pack.id,
-      label: pack.label,
-      os: pack.os,
-      cpuArch: pack.cpuArch,
-      backend: pack.backend,
-      cudaArchitectures: pack.cudaArchitectures,
-      matchComputeCaps: pack.matchComputeCaps,
-      expectSms: pack.expectSms,
-      gpus: pack.gpus,
-      llamaCppTag: process.env.LLAMA_CPP_REF || cat.llamaCppTag,
-      llamaCppCommit: process.env.COMMIT,
-      builtAt: process.env.BUILT_AT,
-      binary: "bin/llama-server",
-      libDir: "lib",
-    };
-    fs.writeFileSync(
-      path.join(process.env.DEST, "manifest.json"),
-      JSON.stringify(manifest, null, 2) + "\n",
-    );
-  '
+  CATALOG="$CATALOG" PACK_ID="$PACK_ID" DEST="$dest" COMMIT="$commit" BUILT_AT="$built_at" python3 - <<'PY'
+import json, os
+from pathlib import Path
+cat = json.load(open(os.environ["CATALOG"]))
+pack = next(p for p in cat.get("packs") or [] if p.get("id") == os.environ["PACK_ID"])
+manifest = {
+    "id": pack["id"],
+    "label": pack["label"],
+    "os": pack["os"],
+    "cpuArch": pack["cpuArch"],
+    "backend": pack["backend"],
+    "cudaArchitectures": pack.get("cudaArchitectures"),
+    "matchComputeCaps": pack.get("matchComputeCaps"),
+    "expectSms": pack.get("expectSms"),
+    "gpus": pack.get("gpus"),
+    "llamaCppTag": os.environ.get("LLAMA_CPP_REF") or cat["llamaCppTag"],
+    "llamaCppCommit": os.environ["COMMIT"],
+    "builtAt": os.environ["BUILT_AT"],
+    "binary": "bin/llama-server",
+    "libDir": "lib",
+}
+Path(os.environ["DEST"], "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY
 }
 
 verify_sms() {
@@ -235,10 +229,10 @@ stage_pack() {
   chmod +x "$dest/bin/llama-server"
 
   local so
-  find "$install_prefix" -type f \( -name 'libggml*.so*' -o -name 'libllama*.so*' -o -name 'libmtmd*.so*' \) \
+  find "$install_prefix" \( -type f -o -type l \) \( -name 'libggml*.so*' -o -name 'libllama*.so*' -o -name 'libmtmd*.so*' \) \
     -exec cp -a {} "$dest/lib/" \;
   # Some layouts drop .so next to the binary.
-  find "$(dirname "$server")" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$dest/lib/" \; 2>/dev/null || true
+  find "$(dirname "$server")" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -a {} "$dest/lib/" \; 2>/dev/null || true
 
   bundle_cuda_libs "$dest/lib"
 
@@ -279,6 +273,14 @@ build_cuda_pack() {
   fi
   export PATH="$cuda_home/bin:$PATH"
   export CUDA_HOME="$cuda_home"
+  # Devel images have no driver. Link against the toolkit stub (libcuda.so.1 comes from the host driver at runtime).
+  if [ -d "$cuda_home/lib64/stubs" ]; then
+    export LIBRARY_PATH="$cuda_home/lib64/stubs${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    if [ -f "$cuda_home/lib64/stubs/libcuda.so" ] && [ ! -e "$cuda_home/lib64/stubs/libcuda.so.1" ]; then
+      ln -sf libcuda.so "$cuda_home/lib64/stubs/libcuda.so.1"
+    fi
+    echo "[backend] CUDA driver stubs $cuda_home/lib64/stubs"
+  fi
 
   if ! command -v nvcc >/dev/null 2>&1; then
     echo "[backend] nvcc not on PATH after adding $cuda_home/bin" >&2
@@ -307,7 +309,7 @@ build_cuda_pack() {
   fi
   jobs="$(nproc_jobs)"
 
-  local ggml_native=ON
+  local ggml_native="${GGML_NATIVE:-ON}"
   if [ "${REVOLVER_BACKEND_DOCKER:-0}" = "1" ]; then
     ggml_native=OFF
   fi
@@ -318,32 +320,35 @@ build_cuda_pack() {
   echo "[backend] CMAKE_CUDA_ARCHITECTURES=$cuda_arch  GGML_NATIVE=$ggml_native"
   echo "[backend] build=$build_dir"
 
-  rm -rf "$build_dir"
+  if [ "${REVOLVER_BACKEND_KEEP_BUILD:-0}" != "1" ]; then
+    rm -rf "$build_dir"
+  fi
   mkdir -p "$build_dir"
 
   cmake -S "$src" -B "$build_dir" -G "$generator" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$install_dir" \
-    -DCMAKE_C_COMPILER="$cc_bin" \
-    -DCMAKE_CXX_COMPILER="$cxx_bin" \
-    -DCMAKE_CUDA_COMPILER="$(command -v nvcc)" \
-    -DCMAKE_CUDA_HOST_COMPILER="$cxx_bin" \
-    -DCMAKE_CUDA_ARCHITECTURES="$cuda_arch" \
-    -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib;$ORIGIN' \
-    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-    -DBUILD_SHARED_LIBS=ON \
-    -DGGML_CUDA=ON \
-    -DGGML_NATIVE="$ggml_native" \
-    -DLLAMA_BUILD_SERVER=ON \
-    -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DLLAMA_BUILD_TESTS=OFF
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$install_dir" \
+      -DCMAKE_C_COMPILER="$cc_bin" \
+      -DCMAKE_CXX_COMPILER="$cxx_bin" \
+      -DCMAKE_CUDA_COMPILER="$(command -v nvcc)" \
+      -DCMAKE_CUDA_HOST_COMPILER="$cxx_bin" \
+      -DCMAKE_CUDA_ARCHITECTURES="$cuda_arch" \
+      -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib;$ORIGIN' \
+      -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+      -DCMAKE_LIBRARY_PATH="$cuda_home/lib64/stubs" \
+      -DCMAKE_EXE_LINKER_FLAGS="-L$cuda_home/lib64/stubs -Wl,-rpath-link,$cuda_home/lib64/stubs -lcuda" \
+      -DCMAKE_SHARED_LINKER_FLAGS="-L$cuda_home/lib64/stubs -Wl,-rpath-link,$cuda_home/lib64/stubs -lcuda" \
+      -DBUILD_SHARED_LIBS=ON \
+      -DGGML_CUDA=ON \
+      -DGGML_NATIVE="$ggml_native" \
+      -DLLAMA_BUILD_SERVER=ON \
+      -DLLAMA_BUILD_EXAMPLES=OFF \
+      -DLLAMA_BUILD_TESTS=OFF
 
   cmake --build "$build_dir" --config Release -j"$jobs" --target llama-server
-  cmake --install "$build_dir"
 
-  # llama.cpp often leaves llama-server + .so in build/bin even when prefix/bin is thin.
-  if [ -x "$build_dir/bin/llama-server" ] && [ ! -x "$install_dir/bin/llama-server" ]; then
-    mkdir -p "$install_dir/bin" "$install_dir/lib"
+  mkdir -p "$install_dir/bin" "$install_dir/lib"
+  if [ -x "$build_dir/bin/llama-server" ]; then
     cp -a "$build_dir/bin/llama-server" "$install_dir/bin/"
     find "$build_dir/bin" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$install_dir/lib/" \;
   fi
@@ -356,8 +361,7 @@ run_docker_build() {
   local dockerfile="$REPO_ROOT/backends/linux/Dockerfile"
   local script=""
   case "$PACK_ID" in
-    linux-cuda-sm70) script=/src/backends/linux/cuda-sm70/build.sh ;;
-    linux-cuda-pascal) script=/src/backends/linux/cuda-pascal/build.sh ;;
+    linux-cuda) script=/src/backends/linux/cuda/build.sh ;;
     *)
       echo "[backend] no docker script for $PACK_ID" >&2
       exit 1
@@ -369,8 +373,11 @@ run_docker_build() {
     -e PACK_ID="$PACK_ID" \
     -e LLAMA_CPP_REF="${LLAMA_CPP_REF:-}" \
     -e REVOLVER_BACKEND_DOCKER=1 \
+    -e REVOLVER_BACKEND_KEEP_BUILD="${REVOLVER_BACKEND_KEEP_BUILD:-0}" \
     -v "$REPO_ROOT:/src" \
     -w /src \
     "$image" \
+    bash -lc 'git config --global --add safe.directory /src; git config --global --add safe.directory /src/backends/src/llama.cpp; exec "$@"' \
+    bash \
     "$script"
 }

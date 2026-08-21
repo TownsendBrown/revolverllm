@@ -15,13 +15,17 @@ import {
 describe("runtimeInstaller catalog", () => {
   it("loads pinned catalog from repo", () => {
     const cat = loadRuntimeCatalog();
-    assert.equal(cat.schemaVersion, 2);
+    assert.equal(cat.schemaVersion, 3);
     assert.equal(cat.llamacpp.tag, "b10453");
     assert.match(cat.llamacpp.sha256, /^[a-f0-9]{64}$/);
     assert.match(cat.llamacpp.url, /TownsendBrown\/revolverllm/);
     assert.equal(cat.mlxRuntime.version, "1.0.0");
     assert.equal(cat.mlxRuntime.pythonVersion, "3.11.15");
     assert.match(cat.mlxRuntime.mlxEngineCommit, /^[a-f0-9]{40}$/);
+    assert.ok(cat.linux?.["linux-cuda"]);
+    assert.ok(cat.linux?.["linux-vulkan"]);
+    assert.ok(cat.linux?.["linux-cpu"]);
+    assert.match(cat.linux["linux-cpu"].sha256, /^[a-f0-9]{64}$/);
   });
 
   it("exposes UI catalog entries", () => {
@@ -30,6 +34,8 @@ describe("runtimeInstaller catalog", () => {
     assert.equal(ui.mlx.id, "mlx");
     assert.ok(ui.llamacpp.sizeBytes > 0);
     assert.match(ui.mlx.label, /mlx-engine/);
+    assert.equal(ui.linux.length, 3);
+    assert.ok(ui.linux.some((e) => e.id === "linux-cuda"));
   });
 
   it("reports install status", () => {
@@ -37,6 +43,8 @@ describe("runtimeInstaller catalog", () => {
     assert.equal(typeof st.llamacpp.installed, "boolean");
     assert.equal(typeof st.mlx.installed, "boolean");
     assert.ok(st.catalog.llamacpp.label);
+    assert.equal(st.linux.length, 3);
+    assert.ok(st.catalog.linux.length === 3);
   });
 
   it("budgets space for the archive plus an extracted tree", () => {

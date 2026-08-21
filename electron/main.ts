@@ -8,26 +8,38 @@ import { bootstrapHfToken, setElectronSecretHooks } from "./lib/secrets";
 import { initElectronConfig, loadConfig } from "./lib/config";
 import { closeChatDb } from "./lib/chatDb";
 import { toIpcError } from "./lib/ipcErrors";
-import { chromeSandboxNeedsNoSandbox } from "./lib/linuxSandbox";
+import { chromeSandboxNeedsNoSandbox, linuxOzonePlatformHint } from "./lib/linuxSandbox";
 import { openPathElectron } from "./lib/openPath";
 import { handlers } from "../server/handlers";
 import { setNativeOpenPathOpener } from "../server/openPathDispatch";
 import { serverManager } from "../server/serverManager";
 import { startOpenAiGateway, stopOpenAiGateway } from "../server/openaiGateway";
 
-function applyLinuxSandboxWorkaround(): void {
+function applyLinuxChromiumSwitches(): void {
   if (process.platform !== "linux") return;
   const helper = join(dirname(process.execPath), "chrome-sandbox");
+  let noSandbox = false;
   try {
     const st = statSync(helper);
-    if (!chromeSandboxNeedsNoSandbox(st.mode, st.uid)) return;
+    noSandbox = chromeSandboxNeedsNoSandbox(st.mode, st.uid);
   } catch {
-    /* missing helper */
+    noSandbox = true;
   }
-  app.commandLine.appendSwitch("no-sandbox");
+  if (noSandbox) {
+    app.commandLine.appendSwitch("no-sandbox");
+    // Zygote assumes a working sandbox + /dev/shm. AppImage hits ESRCH on shm.
+    app.commandLine.appendSwitch("no-zygote");
+  }
+  // AppImage / broken /dev/shm: renderer FATAL instead of a window.
+  app.commandLine.appendSwitch("disable-dev-shm-usage");
+  // NVIDIA + Wayland: Chromium paints an empty window. XWayland works.
+  const ozone = linuxOzonePlatformHint();
+  if (ozone) app.commandLine.appendSwitch("ozone-platform-hint", ozone);
+  // GTK4 hosts often show the same blank window with Electron 34.
+  app.commandLine.appendSwitch("gtk-version", "3");
 }
 
-applyLinuxSandboxWorkaround();
+applyLinuxChromiumSwitches();
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -107,6 +119,19 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.error("did-fail-load", code, desc, url);
+  });
+  win.webContents.on("render-process-gone", (_e, details) => {
+    console.error("render-process-gone", details);
+    if (details.reason === "crashed") {
+      dialog.showErrorBox(
+        "Revolver",
+        "The UI process crashed. If the log mentions /dev/shm, try:\n  sudo chmod 1777 /dev/shm\nor relaunch with --disable-dev-shm-usage",
+      );
+    }
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {

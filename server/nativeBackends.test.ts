@@ -17,22 +17,13 @@ const catalog: BackendCatalog = {
   llamaCppTag: "b0",
   packs: [
     {
-      id: "linux-cuda-sm70",
-      label: "CUDA Volta (sm_70)",
+      id: "linux-cuda",
+      label: "CUDA llama.cpp",
       os: "linux",
       cpuArch: "x86_64",
       backend: "cuda",
-      cudaArchitectures: "70-real",
-      matchComputeCaps: [70],
-    },
-    {
-      id: "linux-cuda-pascal",
-      label: "CUDA Pascal",
-      os: "linux",
-      cpuArch: "x86_64",
-      backend: "cuda",
-      cudaArchitectures: "60-real;61-real",
-      matchComputeCaps: [60, 61],
+      cudaArchitectures: "70-real;75-real;80-real;86-real;89-real;90-real",
+      matchComputeCaps: [70, 75, 80, 86, 87, 89, 90],
     },
   ],
 };
@@ -49,7 +40,7 @@ function fakePack(root: string, id: string): string {
       id,
       os: "linux",
       backend: "cuda",
-      matchComputeCaps: id.includes("sm70") ? [70] : [60, 61],
+      matchComputeCaps: [70, 75, 80, 86, 87, 89, 90],
       binary: "bin/llama-server",
       libDir: "lib",
     }) + "\n",
@@ -58,31 +49,30 @@ function fakePack(root: string, id: string): string {
 }
 
 describe("installed backend packs", () => {
-  it("reads a staged sm70 pack", () => {
+  it("reads a staged cuda pack", () => {
     const root = mkdtempSync(join(tmpdir(), "revolver-pack-"));
-    const dir = fakePack(root, "linux-cuda-sm70");
+    const dir = fakePack(root, "linux-cuda");
     const pack = readInstalledPack(dir, catalog);
     assert.ok(pack);
-    assert.equal(pack.spec.id, "linux-cuda-sm70");
+    assert.equal(pack.spec.id, "linux-cuda");
     assert.ok(pack.bin.endsWith("bin/llama-server"));
   });
 
-  it("picks sm70 when the host reports compute cap 70", () => {
+  it("picks linux-cuda when the host reports any compute cap", () => {
     const root = mkdtempSync(join(tmpdir(), "revolver-packs-"));
-    fakePack(root, "linux-cuda-sm70");
-    fakePack(root, "linux-cuda-pascal");
+    fakePack(root, "linux-cuda");
     const hit = resolveInstalledBackendPack({
       catalog,
       roots: [root],
-      computeCaps: [70],
+      computeCaps: [89],
       platform: "linux",
     });
-    assert.equal(hit?.packId, "linux-cuda-sm70");
+    assert.equal(hit?.packId, "linux-cuda");
   });
 
   it("skips CUDA packs on darwin", () => {
     const root = mkdtempSync(join(tmpdir(), "revolver-packs-"));
-    fakePack(root, "linux-cuda-sm70");
+    fakePack(root, "linux-cuda");
     const hit = resolveInstalledBackendPack({
       catalog,
       roots: [root],
@@ -94,12 +84,27 @@ describe("installed backend packs", () => {
 
   it("lists packs under a search root", () => {
     const root = mkdtempSync(join(tmpdir(), "revolver-packs-"));
-    fakePack(root, "linux-cuda-sm70");
+    fakePack(root, "linux-cuda");
     assert.equal(listInstalledPacks([root], catalog).length, 1);
   });
 
   it("prepends pack lib dir onto LD_LIBRARY_PATH", () => {
     const env = mergeLibPath({ LD_LIBRARY_PATH: "/opt/foo" }, "/pack/lib");
     assert.equal(env.LD_LIBRARY_PATH, "/pack/lib:/opt/foo");
+  });
+
+  it("strips AppImage mount dirs from LD_LIBRARY_PATH", () => {
+    const prev = process.env.APPDIR;
+    process.env.APPDIR = "/tmp/.mount_RevolverXXX";
+    try {
+      const env = mergeLibPath(
+        { LD_LIBRARY_PATH: "/tmp/.mount_RevolverXXX/usr/lib:/usr/lib/x86_64-linux-gnu" },
+        "/pack/lib",
+      );
+      assert.equal(env.LD_LIBRARY_PATH, "/pack/lib:/usr/lib/x86_64-linux-gnu");
+    } finally {
+      if (prev == null) delete process.env.APPDIR;
+      else process.env.APPDIR = prev;
+    }
   });
 });

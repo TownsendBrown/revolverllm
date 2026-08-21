@@ -2,12 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ConfigPanel from "./components/ConfigPanel";
 import ModelsPanel from "./components/ModelsPanel";
 import ChatPanel from "./components/ChatPanel";
-import BenchmarkPanel from "./components/BenchmarkPanel";
 import Logo from "./components/Logo";
 import MonitorPanel from "./components/MonitorPanel";
 import ServerPanel from "./components/ServerPanel";
 import RuntimeSetupPanel from "./components/RuntimeSetupPanel";
-import benchmarkIcon from "../icons/benchmark-icon.v2.svg";
 import configIcon from "../icons/config-icon.v6.svg";
 import chatIcon from "../icons/chat-icon.v1.svg";
 import modelsIcon from "../icons/models-icon.v1.svg";
@@ -22,7 +20,7 @@ import {
   type ServerStatus,
 } from "./revolver";
 
-type Tab = "models" | "chat" | "config" | "monitor" | "server" | "benchmarks";
+type Tab = "models" | "chat" | "config" | "monitor" | "server";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("chat");
@@ -113,7 +111,6 @@ export default function App() {
 
   const shouldPoll =
     tab === "server" ||
-    tab === "benchmarks" ||
     tab === "chat" ||
     Boolean(serverStatus?.activeCount) ||
     anyLoading;
@@ -140,30 +137,20 @@ export default function App() {
   const navIcons: Partial<Record<Tab, string>> = {
     models: modelsIcon,
     chat: chatIcon,
-    benchmarks: benchmarkIcon,
     config: configIcon,
     monitor: monitorIcon,
     server: serverIcon,
   };
 
-  // Benchmarks are not shipped on macOS yet.
-  const benchmarksEnabled = platform != null && platform.os !== "darwin";
   const setupRequired = platform?.os === "darwin" && !runtimeReady;
 
   const nav: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: "Chat", icon: ">" },
     { id: "models", label: "Models", icon: "M" },
-    ...(benchmarksEnabled
-      ? [{ id: "benchmarks" as Tab, label: "Benchmarks", icon: "B" }]
-      : []),
     { id: "server", label: "Server", icon: "#" },
     { id: "config", label: "Config", icon: "*" },
     { id: "monitor", label: "Monitor", icon: "=" },
   ];
-
-  useEffect(() => {
-    if (!benchmarksEnabled && tab === "benchmarks") setTab("chat");
-  }, [benchmarksEnabled, tab]);
 
   const runAction = (fn: () => Promise<unknown> | void) => {
     setMenuOpen(false);
@@ -177,6 +164,7 @@ export default function App() {
 
   const dockerWarn =
     platform &&
+    platform.defaultRuntime !== "native" &&
     !platform.docker &&
     (platform.host === "compose" ||
       platform.defaultRuntime === "docker" ||
@@ -356,13 +344,6 @@ export default function App() {
 
             {tab === "monitor" && <MonitorPanel />}
 
-            {benchmarksEnabled && tab === "benchmarks" && (
-              <BenchmarkPanel
-                servers={serverStatus?.servers ?? []}
-                onError={setError}
-              />
-            )}
-
             {tab === "server" && (
               <ServerPanel
                 models={models}
@@ -374,6 +355,14 @@ export default function App() {
                 onRefresh={pullServerStatus}
                 onError={setError}
                 onServerReady={setPendingChatServerId}
+                onOpenRuntimes={() => {
+                  setTab("config");
+                  window.setTimeout(() => {
+                    document
+                      .getElementById("manage-runtimes")
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }, 50);
+                }}
               />
             )}
           </>
