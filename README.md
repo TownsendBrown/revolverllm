@@ -12,26 +12,46 @@ Revolver is a **control plane**, not the inference engine. A Node backend scans 
 
 ---
 
-## Two deployment paths
+## Install
 
-Development used to be **Docker-first**: the browser UI and backend ran in Compose, and every llama.cpp server was a container on the host daemon. That path still works.
+Desktop builds: [GitHub Releases](https://github.com/TownsendBrown/revolverllm/releases). Thin Electron shell — llama.cpp / MLX download on first use ([Runtimes](#runtimes)).
 
-The default is now an **Electron-first native app**. The desktop shell hosts the same backend. New servers default to a host `llama-server` process. The AppImage is thin — it does **not** bundle llama.cpp. Engines download on first use from GitHub releases (see [Runtimes](#runtimes)).
+### Windows
 
-| Path | What it is | Inference |
-|------|------------|-----------|
-| **Electron** (primary) | Desktop app. Main process hosts the control plane. | Native `llama-server` (default). Docker still available for llama.cpp and required for vLLM. |
-| **Docker Compose** | nginx UI on port 8080 + loopback backend. | Containers only (`docker.sock`). Native spawn is disabled (`REVOLVER_COMPOSE=1`). |
+1. Download `Revolver-<version>-win-x64.exe` (NSIS, per-user, no admin).
+2. Run Setup. Unsigned — SmartScreen **More info → Run anyway**.
+3. Launch **Revolver**. Config, models, and runtimes: `%APPDATA%\Revolver`. Uninstall leaves them.
 
-Use Electron if you want a local desktop app with no Docker for llama.cpp. Use Compose if you want a browser UI and containerized servers.
+NVIDIA driver for CUDA. GPU vendor Vulkan ICD for Vulkan. Neither ships in the installer.
+
+### Linux
+
+1. Download `Revolver-<version>-linux-x64.AppImage`.
+2. Run it: `chmod +x Revolver-*-linux-x64.AppImage && ./Revolver-*-linux-x64.AppImage` — or drag the AppImage to the desktop, right-click → **Properties → Allow executing file as program**, then double-click.
+3. Config: `~/.config/Revolver`. Models default: `~/.revolver/models`.
+
+NVIDIA driver for CUDA. Mesa + user in `video`/`render` + `/dev/dri` for Vulkan. No `libcuda` or Vulkan ICD inside the AppImage.
+
+A `.deb` is also produced by `npm run pack:native`.
+
+### macOS
+
+Apple Silicon (arm64) only.
+
+1. Download `Revolver-<version>-arm64.dmg`.
+2. Open the DMG, drag **Revolver** to Applications.
+3. First launch is blocked (ad-hoc signed, no Developer ID). Open **System Settings → Privacy & Security**, scroll to the Revolver warning, click **Open Anyway**, then confirm.
+4. Setup panel blocks until **llama.cpp (Metal)** and **MLX** both install.
+
+Config and runtimes: `~/Library/Application Support/Revolver`. Models default under that tree.
 
 ---
 
 ## First-time setup (Electron native)
 
-Packaged Linux builds (`npm run pack:native`) ship the UI, the catalog, and nothing else. First launch:
+Packaged builds ship the UI, the catalog, and nothing else. First launch:
 
-1. **Install and open** the AppImage, `.deb`, or Windows NSIS Setup. Electron detects GPUs and writes config under the data dir (`%APPDATA%\Revolver` on Windows; `~/.config/Revolver` when packaged on Linux; `~/.revolver` for models by default on Linux).
+1. **Open** the app ([Install](#install)). Electron detects GPUs and writes config under the data dir.
 2. **Install a runtime.** The app cannot load a model until a llama.cpp SKU is on disk.
    - **Linux / Windows** — Server tab shows **Install recommended** when no SKU is installed. Picker: NVIDIA → CUDA, AMD/Intel → Vulkan, otherwise CPU. Or open **Config → Manage runtimes** and install any SKU.
    - **macOS** — a blocking setup panel. Both **llama.cpp (Metal)** and **MLX** must install before the rest of the UI unlocks. GGUF goes through Metal llama.cpp; safetensors / MLX quants go through MLX.
@@ -86,6 +106,21 @@ npm run install:llama-server
 Publishing a new SKU: `scripts/pack-linux-runtime.sh linux-cuda|linux-vulkan|linux-cpu` or `scripts/pack-win-runtime.ps1 win-cuda|win-vulkan|win-cpu`, then upload onto the same `runtimes-v1` release and update `runtimes/catalog.json`. See [backends/README.md](backends/README.md).
 
 vLLM stays Docker-only. Compose never uses these packs.
+
+---
+
+## Two deployment paths
+
+Development used to be **Docker-first**: the browser UI and backend ran in Compose, and every llama.cpp server was a container on the host daemon. That path still works.
+
+The default is now an **Electron-first native app**. The desktop shell hosts the same backend. New servers default to a host `llama-server` process. The AppImage is thin — it does **not** bundle llama.cpp. Engines download on first use from GitHub releases (see [Runtimes](#runtimes)).
+
+| Path | What it is | Inference |
+|------|------------|-----------|
+| **Electron** (primary) | Desktop app. Main process hosts the control plane. | Native `llama-server` (default). Docker still available for llama.cpp and required for vLLM. |
+| **Docker Compose** | nginx UI on port 8080 + loopback backend. | Containers only (`docker.sock`). Native spawn is disabled (`REVOLVER_COMPOSE=1`). |
+
+Use Electron if you want a local desktop app with no Docker for llama.cpp. Use Compose if you want a browser UI and containerized servers.
 
 ---
 
