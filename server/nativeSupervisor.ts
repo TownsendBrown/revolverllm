@@ -1,6 +1,6 @@
 import { spawn, execFile, type ChildProcess } from "child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, isAbsolute, join } from "path";
 import { promisify } from "util";
 import { getDataDir } from "../electron/lib/config";
 import { resolveLlamaServerBin } from "./llamaServerBin";
@@ -11,6 +11,7 @@ import {
   LLAMA_ENTRYPOINT_SCRIPT,
   llamaEnvFileName,
 } from "../engines/llamacpp/docker";
+import { buildLlamaServerArgs, llamaStartLogLine } from "../engines/llamacpp/nativeArgs";
 import { mlxEnvFileName } from "../engines/mlx/docker";
 import { mlxTokenizerPresent } from "../shared/hubDownloadFiles";
 import { parseLoadEnv } from "../shared/loadEnvFile";
@@ -65,6 +66,22 @@ function parsePids(text: string): number[] {
 }
 
 async function findListenerPids(port: number): Promise<number[]> {
+  if (process.platform === "win32") {
+    try {
+      const { stdout } = await execFileAsync("netstat", ["-ano"], { timeout: 5000 });
+      const pids = new Set<number>();
+      const needle = `:${port}`;
+      for (const line of stdout.split(/\r?\n/)) {
+        if (!line.includes(needle) || !/\sLISTENING\s/i.test(line)) continue;
+        const parts = line.trim().split(/\s+/);
+        const pid = Number(parts[parts.length - 1]);
+        if (pid > 0) pids.add(pid);
+      }
+      return [...pids];
+    } catch {
+      return [];
+    }
+  }
   try {
     const { stdout } = await execFileAsync("lsof", ["-ti", `tcp:${port}`], { timeout: 5000 });
     return parsePids(stdout);
@@ -84,12 +101,17 @@ async function freeHostPort(port: number): Promise<void> {
   if (!pids.length) return;
   for (const pid of pids) {
     try {
-      process.kill(pid, "SIGTERM");
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      } else {
+        process.kill(pid, "SIGTERM");
+      }
     } catch {
       /* gone */
     }
   }
   await new Promise((r) => setTimeout(r, 400));
+  if (process.platform === "win32") return;
   for (const pid of pids) {
     try {
       process.kill(pid, 0);
@@ -160,7 +182,7 @@ export class NativeSupervisor {
       return this.toInspect(rec);
     }
     const modelOnDisk = existsSync(model);
-    const hfRepo = !model.startsWith("/") && model.includes("/");
+    const hfRepo = !isAbsolute(model) && model.includes("/");
     if (!modelOnDisk && !(isMlx && hfRepo)) {
       rec.status = "crashed";
       appendLog(rec, `${isMlx ? "revolver_mlx_server" : "llama-server"}: model not found: ${model}`);
@@ -224,9 +246,6 @@ export class NativeSupervisor {
         appendLog(rec, `[native] backend pack ${resolved.packId} → ${resolved.bin}`);
       }
 
-      const entrypoint = join(this.opts.configDir, LLAMA_ENTRYPOINT_FILE);
-      writeFileSync(entrypoint, LLAMA_ENTRYPOINT_SCRIPT);
-
       const env: NodeJS.ProcessEnv = mergeLibPath(
         {
           ...process.env,
@@ -243,11 +262,29 @@ export class NativeSupervisor {
         resolved.libDir,
       );
 
-      child = spawn("/bin/sh", [entrypoint], {
-        env,
-        cwd: this.opts.configDir,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      if (process.platform === "win32") {
+        const args = buildLlamaServerArgs(
+          { ...fileEnv, LLAMA_HOST: "127.0.0.1", LLAMA_PORT: String(hostPort) },
+          hostPort,
+        );
+        appendLog(rec, `[native] ${resolved.bin} ${args.join(" ")}`);
+        appendLog(rec, llamaStartLogLine(fileEnv, model));
+        const script = /\.(mjs|cjs|js)$/i.test(resolved.bin);
+        child = spawn(script ? process.execPath : resolved.bin, script ? [resolved.bin, ...args] : args, {
+          env,
+          cwd: this.opts.configDir,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      } else {
+        const entrypoint = join(this.opts.configDir, LLAMA_ENTRYPOINT_FILE);
+        writeFileSync(entrypoint, LLAMA_ENTRYPOINT_SCRIPT);
+        child = spawn("/bin/sh", [entrypoint], {
+          env,
+          cwd: this.opts.configDir,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      }
     }
 
     rec.proc = child;
@@ -338,7 +375,14 @@ export class NativeSupervisor {
       return;
     }
     try {
-      proc.kill("SIGTERM");
+      if (process.platform === "win32" && rec.pid) {
+        spawn("taskkill", ["/PID", String(rec.pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      } else {
+        proc.kill("SIGTERM");
+      }
     } catch {
       rec.proc = null;
       rec.pid = null;

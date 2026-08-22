@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   catalogForUi,
+  findLlamaServerBin,
   getRuntimesStatus,
   hasDanglingSymlinks,
   loadRuntimeCatalog,
@@ -15,7 +16,7 @@ import {
 describe("runtimeInstaller catalog", () => {
   it("loads pinned catalog from repo", () => {
     const cat = loadRuntimeCatalog();
-    assert.equal(cat.schemaVersion, 3);
+    assert.equal(cat.schemaVersion, 4);
     assert.equal(cat.llamacpp.tag, "b10453");
     assert.match(cat.llamacpp.sha256, /^[a-f0-9]{64}$/);
     assert.match(cat.llamacpp.url, /TownsendBrown\/revolverllm/);
@@ -26,6 +27,11 @@ describe("runtimeInstaller catalog", () => {
     assert.ok(cat.linux?.["linux-vulkan"]);
     assert.ok(cat.linux?.["linux-cpu"]);
     assert.match(cat.linux["linux-cpu"].sha256, /^[a-f0-9]{64}$/);
+    assert.ok(cat.win?.["win-cuda"]);
+    assert.ok(cat.win?.["win-vulkan"]);
+    assert.ok(cat.win?.["win-cpu"]);
+    assert.match(cat.win["win-cpu"].sha256, /^[a-f0-9]{64}$/);
+    assert.equal(cat.win["win-cpu"].binary, "llama-server.exe");
   });
 
   it("exposes UI catalog entries", () => {
@@ -36,6 +42,8 @@ describe("runtimeInstaller catalog", () => {
     assert.match(ui.mlx.label, /mlx-engine/);
     assert.equal(ui.linux.length, 3);
     assert.ok(ui.linux.some((e) => e.id === "linux-cuda"));
+    assert.equal(ui.win.length, 3);
+    assert.ok(ui.win.some((e) => e.id === "win-cuda"));
   });
 
   it("reports install status", () => {
@@ -45,6 +53,8 @@ describe("runtimeInstaller catalog", () => {
     assert.ok(st.catalog.llamacpp.label);
     assert.equal(st.linux.length, 3);
     assert.ok(st.catalog.linux.length === 3);
+    assert.equal(st.win.length, 3);
+    assert.ok(st.catalog.win.length === 3);
   });
 
   it("budgets space for the archive plus an extracted tree", () => {
@@ -55,7 +65,7 @@ describe("runtimeInstaller catalog", () => {
   });
 });
 
-describe("moveIntoPlace", () => {
+describe("moveIntoPlace", { skip: process.platform === "win32" }, () => {
   function stagedTree(): { root: string; source: string; install: string } {
     const root = mkdtempSync(join(tmpdir(), "revolver-runtime-"));
     const source = join(root, "staging", "extract");
@@ -96,8 +106,21 @@ describe("moveIntoPlace", () => {
   });
 });
 
+describe("findLlamaServerBin", () => {
+  it("finds llama-server.exe next to the unpack root", () => {
+    const root = mkdtempSync(join(tmpdir(), "revolver-winbin-"));
+    try {
+      writeFileSync(join(root, "llama-server.exe"), "");
+      assert.equal(findLlamaServerBin(root), join(root, "llama-server.exe"));
+      assert.equal(findLlamaServerBin(root, "llama-server.exe"), join(root, "llama-server.exe"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("hasDanglingSymlinks", () => {
-  it("flags a link whose target is gone", () => {
+  it("flags a link whose target is gone", { skip: process.platform === "win32" }, () => {
     const root = mkdtempSync(join(tmpdir(), "revolver-dangling-"));
     try {
       symlinkSync(join(root, "missing.dylib"), join(root, "lib.dylib"));

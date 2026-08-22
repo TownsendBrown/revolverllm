@@ -17,6 +17,10 @@
     "start:macos": "mac/scripts/start-electron-macos.sh",
     "start:native": "scripts/start-electron-native.sh",
     "dev:native": "scripts/start-electron-native.sh --dev",
+    "start:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-electron-windows.ps1",
+    "dev:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-electron-windows.ps1 --dev",
+    "pack:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-electron-windows.ps1",
+    "pack:windows:dir": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-electron-windows.ps1 dir",
     "install:llama-server": "scripts/install-llama-server.sh",
     "backend:build:cuda": "bash backends/linux/cuda/build.sh",
     "pack": "npm run rebuild:native && npm run build && electron-builder --linux",
@@ -31,7 +35,7 @@
     "host-agent:stop": "mac/scripts/stop-host-agent.sh",
     "host-open-agent": "scripts/run-host-open-agent.sh",
     "host-open-agent:stop": "scripts/stop-host-open-agent.sh",
-    "test": "tsx --test engines/*.test.ts shared/*.test.ts shared/benchmarks/*.test.ts server/*.test.ts electron/lib/*.test.ts test/native/*.test.ts",
+    "test": "tsx --test engines/*.test.ts engines/**/*.test.ts shared/*.test.ts shared/benchmarks/*.test.ts server/*.test.ts electron/lib/*.test.ts test/native/*.test.ts",
     "test:native": "tsx --test shared/runtimeMode.test.ts shared/nativeBackends.test.ts server/gpuClaims.test.ts server/llamaServerBin.test.ts server/nativeBackends.test.ts test/native/*.test.ts",
     "benchmark:e2e": "tsx scripts/run-benchmark-e2e.ts"
   },
@@ -70,6 +74,19 @@
       "category": "Development",
       "synopsis": "Local model manager for GGUF files",
       "maintainer": "TownsendBrown <179747422+TownsendBrown@users.noreply.github.com>"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
     }
   },
   "dependencies": {

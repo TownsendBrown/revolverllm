@@ -21,20 +21,25 @@ import { createRequire } from "node:module";
 import { getRevolverRoot } from "../electron/lib/appRoot";
 import { getDataDir } from "../electron/lib/config";
 import { getGpuInfo } from "../electron/lib/gpu";
-import { detectComputeCaps } from "./nativeBackends";
+import { detectComputeCaps, mergeLibPath } from "./nativeBackends";
 import {
   isLinuxRuntimeId,
+  isWinRuntimeId,
   linuxRuntimeBackend,
   recommendedLinuxRuntimeId,
+  recommendedWinRuntimeId,
+  winRuntimeBackend,
 } from "../shared/nativeRuntimeMatch";
 import {
   LINUX_RUNTIME_IDS,
+  WIN_RUNTIME_IDS,
   type InferenceBackend,
   type LinuxRuntimeId,
   type RuntimeCatalog,
   type RuntimeId,
   type RuntimeInstallJob,
   type RuntimeStatus,
+  type WinRuntimeId,
 } from "../shared/types";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -80,6 +85,7 @@ export interface RuntimeCatalogFile {
     pythonVersion: string;
   };
   linux?: Record<LinuxRuntimeId, LinuxCatalogAsset>;
+  win?: Record<WinRuntimeId, LinuxCatalogAsset>;
 }
 
 function runtimesRoot(): string {
@@ -174,6 +180,17 @@ export function catalogForUi(): RuntimeCatalog {
       minMacos: c.mlxRuntime.minMacos,
     },
     linux,
+    win: WIN_RUNTIME_IDS.map((id) => {
+      const spec = c.win?.[id];
+      return {
+        id,
+        label: spec?.label ?? id,
+        sizeBytes: spec?.sizeBytes ?? 0,
+        tag: spec?.tag,
+        backend: spec?.backend ?? winRuntimeBackend(id),
+        matchComputeCaps: spec?.matchComputeCaps,
+      };
+    }),
   };
 }
 
@@ -239,13 +256,20 @@ function linuxAsset(id: LinuxRuntimeId): LinuxCatalogAsset | null {
   return loadRuntimeCatalog().linux?.[id] ?? null;
 }
 
+function winAsset(id: WinRuntimeId): LinuxCatalogAsset | null {
+  return loadRuntimeCatalog().win?.[id] ?? null;
+}
+
 /** Locate llama-server in an extracted runtime tree (CUDA pack or ggml ubuntu layout). */
 export function findLlamaServerBin(root: string, binaryRel?: string, depth = 0): string | null {
   const candidates = [
     binaryRel && depth === 0 ? join(root, binaryRel) : "",
     join(root, "llama-server"),
+    join(root, "llama-server.exe"),
     join(root, "bin", "llama-server"),
+    join(root, "bin", "llama-server.exe"),
     join(root, "build", "bin", "llama-server"),
+    join(root, "build", "bin", "llama-server.exe"),
   ].filter(Boolean);
   for (const p of candidates) {
     if (existsSync(p)) return p;
@@ -327,6 +351,60 @@ export function resolveLinuxLlamaServer(opts?: {
   return installed.find((r) => r.id === rec) ?? installed[0] ?? null;
 }
 
+export interface InstalledWinRuntime {
+  id: WinRuntimeId;
+  root: string;
+  bin: string;
+  libDir: string;
+  tag: string;
+}
+
+export function installedWinRuntime(id: WinRuntimeId): InstalledWinRuntime | null {
+  const tag = readCurrentTag(id);
+  if (!tag) return null;
+  const root = join(runtimesRoot(), id, tag);
+  const spec = winAsset(id);
+  const bin = findLlamaServerBin(root, spec?.binary);
+  if (!bin) return null;
+  return { id, root, bin, libDir: libDirForBin(root, bin, spec?.libDir), tag };
+}
+
+export function listInstalledWinRuntimes(): InstalledWinRuntime[] {
+  return WIN_RUNTIME_IDS.map((id) => installedWinRuntime(id)).filter(
+    (r): r is InstalledWinRuntime => r != null,
+  );
+}
+
+export function resolveWinLlamaServer(opts?: {
+  backend?: InferenceBackend;
+  computeCaps?: number[];
+  forceId?: WinRuntimeId;
+}): InstalledWinRuntime | null {
+  const installed = listInstalledWinRuntimes();
+  if (!installed.length) return null;
+  if (opts?.forceId) return installed.find((r) => r.id === opts.forceId) ?? null;
+
+  const backend = opts?.backend;
+  if (backend === "cuda") {
+    return installed.find((r) => r.id === "win-cuda") ?? null;
+  }
+  if (backend === "vulkan") {
+    return installed.find((r) => r.id === "win-vulkan") ?? null;
+  }
+  if (backend === "cpu") {
+    return installed.find((r) => r.id === "win-cpu") ?? installed[0] ?? null;
+  }
+  const caps = opts?.computeCaps ?? detectComputeCaps();
+  let gpu = null;
+  try {
+    gpu = getGpuInfo();
+  } catch {
+    gpu = null;
+  }
+  const rec = recommendedWinRuntimeId({ computeCaps: caps, gpu });
+  return installed.find((r) => r.id === rec) ?? installed[0] ?? null;
+}
+
 export function installedMlxRuntimeDir(): string | null {
   const tag = readCurrentTag("mlx");
   if (!tag) return null;
@@ -385,11 +463,29 @@ async function downloadUrl(opts: {
 }
 
 function extractTarGz(archive: string, destDir: string): void {
+  extractArchive(archive, destDir);
+}
+
+function extractArchive(archive: string, destDir: string): void {
   mkdirSync(destDir, { recursive: true });
-  const r = spawnSync("tar", ["-xzf", archive, "-C", destDir, "--no-same-owner"], { encoding: "utf8" });
-  if (r.status !== 0) {
-    throw new Error(r.stderr?.trim() || r.stdout?.trim() || "tar extract failed");
+  const zip = archive.toLowerCase().endsWith(".zip");
+  const args = zip
+    ? ["-xf", archive, "-C", destDir]
+    : process.platform === "win32"
+      ? ["-xzf", archive, "-C", destDir]
+      : ["-xzf", archive, "-C", destDir, "--no-same-owner"];
+  const r = spawnSync("tar", args, { encoding: "utf8" });
+  if (r.status === 0) return;
+  if (zip && process.platform === "win32") {
+    const ps = spawnSync(
+      "powershell",
+      ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${archive.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force`],
+      { encoding: "utf8" },
+    );
+    if (ps.status === 0) return;
+    throw new Error(ps.stderr?.trim() || r.stderr?.trim() || "zip extract failed");
   }
+  throw new Error(r.stderr?.trim() || r.stdout?.trim() || "tar extract failed");
 }
 
 /**
@@ -632,12 +728,84 @@ async function installLinuxRuntime(
     const probe = spawnSync(bin, ["--version"], {
       encoding: "utf8",
       timeout: 30_000,
-      env: {
-        ...process.env,
-        LD_LIBRARY_PATH: libDir
-          ? `${libDir}${process.env.LD_LIBRARY_PATH ? `:${process.env.LD_LIBRARY_PATH}` : ""}`
-          : process.env.LD_LIBRARY_PATH,
-      },
+      env: mergeLibPath({ ...process.env }, libDir),
+    });
+    if (probe.status !== 0) {
+      throw new Error(
+        probe.stderr?.trim() || probe.stdout?.trim() || "llama-server --version failed",
+      );
+    }
+  } catch (e) {
+    clearInstall(runtimeId, spec.tag);
+    throw e;
+  }
+
+  setCurrentTag(runtimeId, spec.tag);
+  rmSync(staging, { recursive: true, force: true });
+  updateJob(jobId, {
+    phase: "done",
+    progress: 100,
+    bytesDone: spec.sizeBytes,
+    bytesTotal: spec.sizeBytes,
+    installPath: installDir,
+  });
+}
+
+async function installWinRuntime(
+  jobId: string,
+  runtimeId: WinRuntimeId,
+  signal: AbortSignal,
+): Promise<void> {
+  if (process.platform !== "win32") {
+    throw new Error("Windows llama.cpp runtimes can only be installed on Windows");
+  }
+  const spec = winAsset(runtimeId);
+  if (!spec) throw new Error(`Windows runtime ${runtimeId} is missing from runtimes/catalog.json`);
+
+  const staging = join(runtimesRoot(), ".staging", jobId);
+  const archive = join(staging, spec.asset);
+  mkdirSync(staging, { recursive: true });
+  ensureFreeSpace(staging, spec.sizeBytes);
+
+  updateJob(jobId, { phase: "download", progress: 0, bytesTotal: spec.sizeBytes });
+  await downloadUrl({
+    url: spec.url,
+    destPath: archive,
+    expectedSha256: spec.sha256,
+    signal,
+    onProgress: (bytes, total) => {
+      updateJob(jobId, {
+        bytesDone: bytes,
+        bytesTotal: total ?? spec.sizeBytes,
+        progress: total ? Math.min(40, Math.round((bytes / total) * 40)) : 10,
+      });
+    },
+  });
+
+  updateJob(jobId, { phase: "extract", progress: 45 });
+  const extractRoot = join(staging, "extract");
+  rmSync(extractRoot, { recursive: true, force: true });
+  extractArchive(archive, extractRoot);
+
+  const unpacked =
+    spec.unpackDir === "." ? extractRoot : join(extractRoot, spec.unpackDir);
+  if (!existsSync(unpacked)) {
+    throw new Error(`Expected unpack dir ${spec.unpackDir} not found in archive`);
+  }
+  rmSync(archive, { force: true });
+
+  const installDir = join(runtimesRoot(), runtimeId, spec.tag);
+  moveIntoPlace(unpacked, installDir);
+
+  try {
+    updateJob(jobId, { phase: "verify", progress: 85 });
+    const bin = findLlamaServerBin(installDir, spec.binary);
+    if (!bin) throw new Error("llama-server.exe not found in extracted runtime");
+    const libDir = libDirForBin(installDir, bin, spec.libDir);
+    const probe = spawnSync(bin, ["--version"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: mergeLibPath({ ...process.env }, libDir),
     });
     if (probe.status !== 0) {
       throw new Error(
@@ -738,6 +906,7 @@ async function runJob(id: string): Promise<void> {
     if (job.runtimeId === "llamacpp") await installLlamaCpp(id, ac.signal);
     else if (job.runtimeId === "mlx") await installMlx(id, ac.signal);
     else if (isLinuxRuntimeId(job.runtimeId)) await installLinuxRuntime(id, job.runtimeId, ac.signal);
+    else if (isWinRuntimeId(job.runtimeId)) await installWinRuntime(id, job.runtimeId, ac.signal);
     else throw new Error(`Unknown runtime: ${job.runtimeId}`);
     updateJob(id, { status: "done", progress: 100 });
   } catch (e) {
@@ -772,6 +941,16 @@ export function getRuntimesStatus(): RuntimeStatus {
       backend: linuxRuntimeBackend(id),
     };
   });
+  const win = WIN_RUNTIME_IDS.map((id) => {
+    const hit = installedWinRuntime(id);
+    return {
+      id,
+      installed: Boolean(hit),
+      path: hit?.bin ?? null,
+      tag: hit?.tag ?? readCurrentTag(id),
+      backend: winRuntimeBackend(id),
+    };
+  });
   let gpu = null;
   try {
     gpu = getGpuInfo();
@@ -781,6 +960,10 @@ export function getRuntimesStatus(): RuntimeStatus {
   const recommendedLinuxId =
     process.platform === "linux"
       ? recommendedLinuxRuntimeId({ computeCaps: detectComputeCaps(), gpu })
+      : null;
+  const recommendedWinId =
+    process.platform === "win32"
+      ? recommendedWinRuntimeId({ computeCaps: detectComputeCaps(), gpu })
       : null;
   return {
     catalog: cat,
@@ -795,7 +978,9 @@ export function getRuntimesStatus(): RuntimeStatus {
       runtimePath: mlxOk ? mlxDir : null,
     },
     linux,
+    win,
     recommendedLinuxId,
+    recommendedWinId,
     platform: process.platform,
   };
 }
@@ -810,19 +995,18 @@ export function getRuntimeInstallJob(id: string): RuntimeInstallJob | null {
 
 export async function startRuntimeInstall(runtimeId: RuntimeId): Promise<RuntimeInstallJob> {
   const linux = isLinuxRuntimeId(runtimeId);
+  const win = isWinRuntimeId(runtimeId);
   if (runtimeId === "mlx" && process.platform !== "darwin") {
     throw new Error("MLX runtime install is macOS only");
   }
   if (runtimeId === "llamacpp" && process.platform !== "darwin") {
     throw new Error("Metal llama.cpp runtime install is macOS only");
   }
-  if (linux && process.platform === "darwin") {
-    throw new Error("Linux llama.cpp runtimes cannot be installed on macOS");
+  if (linux && process.platform !== "linux") {
+    throw new Error("Linux llama.cpp runtimes can only be installed on Linux");
   }
-  if (runtimeId === "llamacpp" || runtimeId === "mlx") {
-    if (process.platform !== "darwin") {
-      throw new Error("Runtime install is supported on macOS only");
-    }
+  if (win && process.platform !== "win32") {
+    throw new Error("Windows llama.cpp runtimes can only be installed on Windows");
   }
   if (activeJobId) {
     const active = jobs.get(activeJobId);
@@ -834,6 +1018,8 @@ export async function startRuntimeInstall(runtimeId: RuntimeId): Promise<Runtime
   const cat = loadRuntimeCatalog();
   const bytesTotal = linux
     ? (cat.linux?.[runtimeId]?.sizeBytes ?? 0)
+    : win
+      ? (cat.win?.[runtimeId]?.sizeBytes ?? 0)
     : runtimeId === "llamacpp"
       ? cat.llamacpp.sizeBytes
       : cat.mlxRuntime.sizeBytes;

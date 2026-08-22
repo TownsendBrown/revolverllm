@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 import type { ModelFormat, ModelSource } from "../../shared/types";
 import { getDownloadsDir, getHubModelsDir } from "./paths";
 
@@ -149,6 +149,7 @@ export function scanLocalHfModels(): LocalHfModel[] {
 
 /** True when the string looks like a HuggingFace repo id (owner/name). */
 export function isHfRepoId(value: string): boolean {
+  if (isAbsolute(value)) return false;
   if (value.includes("/") && !value.startsWith("/") && !value.endsWith(".gguf")) {
     const parts = value.split("/");
     return parts.length === 2 && parts[0].length > 0 && parts[1].length > 0 && !parts[0].includes(".");

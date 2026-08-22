@@ -67,14 +67,21 @@ function resolveNvidiaSmi(): string {
   const envPath = process.env.NVIDIA_SMI_PATH;
   if (envPath && existsSync(envPath)) return envPath;
 
-  for (const candidate of ["/usr/bin/nvidia-smi", "/usr/local/bin/nvidia-smi"]) {
+  const unix = ["/usr/bin/nvidia-smi", "/usr/local/bin/nvidia-smi"];
+  const win = [
+    join(process.env.SystemRoot ?? "C:\\Windows", "System32", "nvidia-smi.exe"),
+    join(process.env["ProgramFiles"] ?? "C:\\Program Files", "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+    join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+  ];
+  for (const candidate of process.platform === "win32" ? win : unix) {
     if (existsSync(candidate)) return candidate;
   }
 
-  const which = spawnSync("which", ["nvidia-smi"], { encoding: "utf8" });
+  const finder = process.platform === "win32" ? "where" : "which";
+  const which = spawnSync(finder, ["nvidia-smi"], { encoding: "utf8" });
   if (which.status === 0) {
-    const found = which.stdout.trim();
-    if (found) return found;
+    const found = which.stdout.trim().split(/\r?\n/)[0];
+    if (found && existsSync(found)) return found;
   }
 
   throw new Error(

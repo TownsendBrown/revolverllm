@@ -195,6 +195,13 @@ export function stripAppImageLibDirs(ldPath: string | undefined, appDir?: string
 }
 
 export function mergeLibPath(env: NodeJS.ProcessEnv, libDir?: string | null): NodeJS.ProcessEnv {
+  if (process.platform === "win32") {
+    if (!libDir) return env;
+    const delim = ";";
+    const current = (env.PATH ?? env.Path ?? "").split(delim).filter(Boolean);
+    const parts = [libDir, ...current.filter((p) => p !== libDir)];
+    return { ...env, PATH: parts.join(delim) };
+  }
   const cleaned = stripAppImageLibDirs(env.LD_LIBRARY_PATH);
   const parts = libDir ? [libDir, ...cleaned.filter((p) => p !== libDir)] : cleaned;
   if (!parts.length) {

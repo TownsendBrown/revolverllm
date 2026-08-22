@@ -53,6 +53,9 @@ export type {
   RuntimeId,
   LinuxRuntimeId,
   LinuxRuntimeInstallStatus,
+  WinRuntimeId,
+  WinRuntimeInstallStatus,
+  HostRuntimeId,
   RuntimeInstallJob,
   RuntimeStatus,
 } from "../shared/types";

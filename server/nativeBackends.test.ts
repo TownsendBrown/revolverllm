@@ -55,7 +55,7 @@ describe("installed backend packs", () => {
     const pack = readInstalledPack(dir, catalog);
     assert.ok(pack);
     assert.equal(pack.spec.id, "linux-cuda");
-    assert.ok(pack.bin.endsWith("bin/llama-server"));
+    assert.match(pack.bin.replace(/\\/g, "/"), /bin\/llama-server$/);
   });
 
   it("picks linux-cuda when the host reports any compute cap", () => {
@@ -88,12 +88,16 @@ describe("installed backend packs", () => {
     assert.equal(listInstalledPacks([root], catalog).length, 1);
   });
 
-  it("prepends pack lib dir onto LD_LIBRARY_PATH", () => {
-    const env = mergeLibPath({ LD_LIBRARY_PATH: "/opt/foo" }, "/pack/lib");
-    assert.equal(env.LD_LIBRARY_PATH, "/pack/lib:/opt/foo");
+  it("prepends pack lib dir onto LD_LIBRARY_PATH or PATH", () => {
+    const env = mergeLibPath({ LD_LIBRARY_PATH: "/opt/foo", PATH: "C:\\Windows" }, "/pack/lib");
+    if (process.platform === "win32") {
+      assert.match(env.PATH ?? "", /^[/\\]pack[/\\]lib;/);
+    } else {
+      assert.equal(env.LD_LIBRARY_PATH, "/pack/lib:/opt/foo");
+    }
   });
 
-  it("strips AppImage mount dirs from LD_LIBRARY_PATH", () => {
+  it("strips AppImage mount dirs from LD_LIBRARY_PATH", { skip: process.platform === "win32" }, () => {
     const prev = process.env.APPDIR;
     process.env.APPDIR = "/tmp/.mount_RevolverXXX";
     try {

@@ -49,6 +49,9 @@ if (!gotLock) {
 }
 
 function bootstrap(): void {
+  if (process.platform === "win32") {
+    app.setAppUserModelId("ai.revolver.app");
+  }
   applyElectronDockerEnv();
   applyPackagedRuntimeDefault();
   setNativeOpenPathOpener(openPathElectron);

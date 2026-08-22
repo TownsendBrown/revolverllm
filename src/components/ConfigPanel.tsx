@@ -7,7 +7,7 @@ import {
   type RevolverSettingsView,
 } from "../revolver";
 import { vendorLabel } from "../../shared/gpuDevices";
-import { linuxRuntimeCards, RuntimeCardGrid, useRuntimeInstalls } from "./RuntimeCards";
+import { linuxRuntimeCards, RuntimeCardGrid, useRuntimeInstalls, winRuntimeCards } from "./RuntimeCards";
 
 type Props = {
   config: RevolverConfig | null;
@@ -24,7 +24,7 @@ function gb(n: number) {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function LinuxRuntimeManager() {
+function HostRuntimeManager({ os }: { os: "linux" | "win32" }) {
   const { status, jobs, error, install, activeJob } = useRuntimeInstalls();
   if (!status) {
     return error ? (
@@ -34,14 +34,18 @@ function LinuxRuntimeManager() {
       </section>
     ) : null;
   }
-  const cards = linuxRuntimeCards(status);
+  const cards = os === "win32" ? winRuntimeCards(status) : linuxRuntimeCards(status);
   const rec = cards.find((c) => c.recommended);
+  const hostHint =
+    os === "win32"
+      ? "NVIDIA driver required for CUDA; GPU vendor Vulkan ICD for Vulkan."
+      : "NVIDIA driver required for CUDA; Mesa + /dev/dri for Vulkan.";
   return (
     <section className="panel" id="manage-runtimes">
       <h3>Manage runtimes</h3>
       <p className="muted small">
         Download llama.cpp engines from GitHub releases. Install at least one before starting a
-        native server. NVIDIA driver required for CUDA; Mesa + <code>/dev/dri</code> for Vulkan.
+        native server. {hostHint}
       </p>
       {error && <div className="banner error inline">{error}</div>}
       {rec && !rec.installed && (
@@ -431,7 +435,9 @@ export default function ConfigPanel({
         </>
       )}
 
-      {platform && platform.os === "linux" && <LinuxRuntimeManager />}
+      {platform && (platform.os === "linux" || platform.os === "win32") && (
+        <HostRuntimeManager os={platform.os} />
+      )}
 
       {platform && platform.os !== "linux" && (
         <section className="panel">

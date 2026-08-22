@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { join, relative } from "path";
+import { isAbsolute, join, relative } from "path";
 import { fileURLToPath } from "url";
 import { loadConfig } from "./config";
 
@@ -40,7 +40,7 @@ export function toContainerModelPath(modelPath: string): string {
     return `${containerRoot}${normalized.slice(hostRoot.length)}`;
   }
 
-  if (!normalized.startsWith("/")) {
+  if (!isAbsolute(normalized) && !normalized.startsWith("/")) {
     return join(containerRoot, normalized);
   }
 

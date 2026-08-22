@@ -62,9 +62,31 @@ jobs:
           APP=release-native/linux-unpacked
           test -d "$APP"
           test -f "$APP/resources/runtimes/catalog.json"
-          node -e 'const c=require("./release-native/linux-unpacked/resources/runtimes/catalog.json"); if (c.schemaVersion!==3) process.exit(1); if (!c.linux["linux-cuda"]||!c.linux["linux-vulkan"]||!c.linux["linux-cpu"]) process.exit(1)'
+          node -e 'const c=require("./release-native/linux-unpacked/resources/runtimes/catalog.json"); if (c.schemaVersion!==4) process.exit(1); if (!c.linux["linux-cuda"]||!c.linux["linux-vulkan"]||!c.linux["linux-cpu"]) process.exit(1); if (!c.win["win-cuda"]||!c.win["win-vulkan"]||!c.win["win-cpu"]) process.exit(1)'
           if find "$APP" -name 'llama-server' | grep -q .; then
             echo "llama-server must not be bundled in the AppImage" >&2
             find "$APP" -name 'llama-server'
             exit 1
           fi
+
+  pack-windows:
+    runs-on: windows-latest
+    needs: [test, test-native]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run pack:windows:dir
+      - name: Smoke-check native unpacked Windows app
+        shell: pwsh
+        run: |
+          $app = "release-win/win-unpacked"
+          if (-not (Test-Path $app)) { throw "missing $app" }
+          $cat = Get-Content "$app/resources/runtimes/catalog.json" -Raw | ConvertFrom-Json
+          if ($cat.schemaVersion -ne 4) { throw "schemaVersion" }
+          if (-not $cat.win.'win-cuda' -or -not $cat.win.'win-vulkan' -or -not $cat.win.'win-cpu') { throw "missing win SKUs" }
+          $bundled = Get-ChildItem -Recurse $app -Filter llama-server.exe -ErrorAction SilentlyContinue
+          if ($bundled) { throw "llama-server.exe must not be bundled" }

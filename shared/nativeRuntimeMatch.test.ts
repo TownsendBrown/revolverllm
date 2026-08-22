@@ -4,10 +4,13 @@ import type { GpuDevice } from "./types";
 import {
   cudaSkuMatchesCaps,
   isLinuxRuntimeId,
+  isWinRuntimeId,
   linuxCudaSkuForCaps,
   linuxRuntimeBackend,
   nativeSkuBlock,
   recommendedLinuxRuntimeId,
+  recommendedWinRuntimeId,
+  winRuntimeBackend,
 } from "./nativeRuntimeMatch";
 
 function gpu(partial: Partial<GpuDevice> & Pick<GpuDevice, "vendor">): GpuDevice {
@@ -70,6 +73,40 @@ describe("linux runtime match", () => {
       "linux-vulkan",
     );
     assert.equal(recommendedLinuxRuntimeId({ computeCaps: [], gpu: null }), "linux-cpu");
+  });
+
+  it("maps Windows ids and recommends CUDA / Vulkan / CPU", () => {
+    assert.equal(winRuntimeBackend("win-cuda"), "cuda");
+    assert.equal(winRuntimeBackend("win-vulkan"), "vulkan");
+    assert.equal(winRuntimeBackend("win-cpu"), "cpu");
+    assert.equal(isWinRuntimeId("win-cpu"), true);
+    assert.equal(isWinRuntimeId("linux-cpu"), false);
+    const nvidia = {
+      available: true,
+      deviceCount: 1,
+      totalVramBytes: 1,
+      totalFreeVramBytes: 1,
+      devices: [gpu({ vendor: "nvidia" as const })],
+    };
+    assert.equal(recommendedWinRuntimeId({ computeCaps: [89], gpu: nvidia }), "win-cuda");
+    assert.equal(
+      recommendedWinRuntimeId({
+        computeCaps: [],
+        gpu: {
+          available: true,
+          deviceCount: 1,
+          totalVramBytes: 1,
+          totalFreeVramBytes: 1,
+          devices: [gpu({ vendor: "amd", name: "RX 5700 XT" })],
+        },
+      }),
+      "win-vulkan",
+    );
+    assert.equal(recommendedWinRuntimeId({ computeCaps: [], gpu: null }), "win-cpu");
+    assert.equal(
+      nativeSkuBlock("cuda", { installed: ["win-cuda"], computeCaps: [70], devices: [gpu({ vendor: "nvidia" })] }),
+      null,
+    );
   });
 
   it("blocks CUDA until the SKU is installed", () => {

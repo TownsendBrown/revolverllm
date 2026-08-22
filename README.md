@@ -31,13 +31,13 @@ Use Electron if you want a local desktop app with no Docker for llama.cpp. Use C
 
 Packaged Linux builds (`npm run pack:native`) ship the UI, the catalog, and nothing else. First launch:
 
-1. **Install and open** the AppImage or `.deb`. Electron detects GPUs and writes config under the data dir (`~/.config/Revolver` when packaged; `~/.revolver` for models by default).
+1. **Install and open** the AppImage, `.deb`, or Windows NSIS Setup. Electron detects GPUs and writes config under the data dir (`%APPDATA%\Revolver` on Windows; `~/.config/Revolver` when packaged on Linux; `~/.revolver` for models by default on Linux).
 2. **Install a runtime.** The app cannot load a model until a llama.cpp SKU is on disk.
-   - **Linux** — Server tab shows **Install recommended** when no SKU is installed. Picker: NVIDIA → CUDA, AMD/Intel → Vulkan, otherwise CPU. Or open **Config → Manage runtimes** and install any SKU.
+   - **Linux / Windows** — Server tab shows **Install recommended** when no SKU is installed. Picker: NVIDIA → CUDA, AMD/Intel → Vulkan, otherwise CPU. Or open **Config → Manage runtimes** and install any SKU.
    - **macOS** — a blocking setup panel. Both **llama.cpp (Metal)** and **MLX** must install before the rest of the UI unlocks. GGUF goes through Metal llama.cpp; safetensors / MLX quants go through MLX.
-3. **Download.** Revolver fetches the tarball from the GitHub `runtimes-v*` release, checks SHA-256, unpacks into the data dir (`<dataDir>/runtimes/<id>/<tag>/`).
-4. **Host deps** (not bundled): NVIDIA driver for CUDA; Mesa + `video`/`render` membership and `/dev/dri` for Vulkan. Do not expect `libcuda` or Vulkan ICDs inside the AppImage.
-5. **Models.** Default directory is `~/.revolver/models` (Linux) or under Application Support (macOS). Drop GGUF files there, or change the path in Config. Hugging Face hub layouts work.
+3. **Download.** Revolver fetches the archive from the GitHub `runtimes-v*` release, checks SHA-256, unpacks into the data dir (`<dataDir>/runtimes/<id>/<tag>/`).
+4. **Host deps** (not bundled): NVIDIA driver for CUDA; Mesa + `video`/`render` + `/dev/dri` on Linux or the GPU vendor Vulkan ICD on Windows. Do not expect `libcuda` or Vulkan ICDs inside the AppImage / NSIS installer.
+5. **Models.** Default directory is `~/.revolver/models` (Linux), `%APPDATA%\Revolver\models` (Windows), or under Application Support (macOS). Drop GGUF files there, or change the path in Config. Hugging Face hub layouts work.
 6. **Create a server** and load a model. Native processes bind `127.0.0.1:<port>` with host `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` (no Docker GPU remapping). Two servers on GPU 0 and GPU 1 is the supported parallel layout; overlapping GPUs are rejected unless you pass `force`.
 
 Dev from a clone (native default):
@@ -68,6 +68,9 @@ A **runtime** is a versioned llama.cpp (or MLX) tree: `llama-server` plus its sh
 | `linux-cuda` | Linux | CUDA 12 fat binary (sm_70–sm_90) | Revolver-built. Pascal (sm_60/61): use Vulkan. |
 | `linux-vulkan` | Linux | Vulkan | ggml-org Ubuntu tarball, rehosted. |
 | `linux-cpu` | Linux | CPU (AVX2) | ggml-org Ubuntu tarball, rehosted. |
+| `win-cuda` | Windows | CUDA 12.4 + bundled cudart | ggml-org zip, rehosted. NVIDIA driver required. |
+| `win-vulkan` | Windows | Vulkan | ggml-org zip, rehosted. GPU Vulkan ICD required. |
+| `win-cpu` | Windows | CPU (AVX2) | ggml-org zip, rehosted. |
 | `llamacpp` | macOS | Metal | GGUF. |
 | `mlx` | macOS | MLX | Safetensors / MLX quants; bundled Python + mlx-engine. |
 
@@ -80,7 +83,7 @@ Install from the UI (Config → Manage runtimes). The installer downloads, verif
 npm run install:llama-server
 ```
 
-Publishing a new SKU: `scripts/pack-linux-runtime.sh linux-cuda|linux-vulkan|linux-cpu`, then upload the tarball onto the same `runtimes-v1` release and update `runtimes/catalog.json`. See [backends/README.md](backends/README.md).
+Publishing a new SKU: `scripts/pack-linux-runtime.sh linux-cuda|linux-vulkan|linux-cpu` or `scripts/pack-win-runtime.ps1 win-cuda|win-vulkan|win-cpu`, then upload onto the same `runtimes-v1` release and update `runtimes/catalog.json`. See [backends/README.md](backends/README.md).
 
 vLLM stays Docker-only. Compose never uses these packs.
 
@@ -238,7 +241,18 @@ npm run pack           # AppImage + deb → release/         (Docker default)
                           └── revolver_*_amd64.deb
 ```
 
-`pack:native` writes `revolverRuntime=native` into the packaged `package.json`. `runtimes/catalog.json` ships via `extraResources` (do not pass `-c.extraResources` on the CLI — that drops the catalog). llama-server is not inside the AppImage.
+**Package (Windows)**
+
+```bash
+npm run pack:windows       # NSIS Setup.exe → release-win/
+npm run pack:windows:dir   # unpacked dir
+npm run start:windows      # production Electron, native default
+npm run dev:windows        # Vite + Electron, native default
+```
+
+Per-user NSIS (no admin). Data and downloaded SKUs live in `%APPDATA%\Revolver`. Uninstall does not delete models or runtimes. Unsigned — SmartScreen “Run anyway” is expected.
+
+`pack:native` / `pack:windows` writes `revolverRuntime=native` into the packaged `package.json`. `runtimes/catalog.json` ships via `extraResources` (do not pass `-c.extraResources` on the CLI — that drops the catalog). llama-server is not inside the AppImage or NSIS installer.
 
 ### Docker
 
@@ -293,6 +307,10 @@ docker compose down
 | `npm run pack` | Linux AppImage + deb → `release/` |
 | `npm run pack:native` | Linux AppImage + deb → `release-native/` (native default, catalog only) |
 | `npm run pack:native:dir` | Unpacked native Electron dir |
+| `npm run pack:windows` | Windows NSIS Setup.exe → `release-win/` (native default, catalog only) |
+| `npm run pack:windows:dir` | Unpacked Windows Electron dir → `release-win/win-unpacked` |
+| `npm run start:windows` | Production Electron on Windows, native llama-server default |
+| `scripts/pack-win-runtime.ps1 <id>` | Zip/hash a Windows SKU; print catalog snippet for `runtimes-v1` |
 | `scripts/pack-linux-runtime.sh <id>` | Tar/hash a Linux SKU; print catalog snippet for `runtimes-v*` |
 | `npm run server` | Standalone Express backend |
 | `npm run test` | Unit tests |

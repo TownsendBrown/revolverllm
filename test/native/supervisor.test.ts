@@ -62,7 +62,7 @@ describe("NativeSupervisor multi-instance", () => {
 
   const native = new NativeSupervisor({
     configDir,
-    llamaServerBin: shim,
+    llamaServerBin: process.platform === "win32" ? MOCK_BIN : shim,
   });
 
   const ids: string[] = [];

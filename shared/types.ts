@@ -87,12 +87,23 @@ export type InferenceBackend = "cuda" | "rocm" | "vulkan" | "cpu" | "metal";
 export type GpuVendor = "nvidia" | "amd" | "intel" | "apple";
 
 export const LINUX_RUNTIME_IDS = ["linux-cuda", "linux-vulkan", "linux-cpu"] as const;
+export const WIN_RUNTIME_IDS = ["win-cuda", "win-vulkan", "win-cpu"] as const;
 
 export type LinuxRuntimeId = (typeof LINUX_RUNTIME_IDS)[number];
-export type RuntimeId = "llamacpp" | "mlx" | LinuxRuntimeId;
+export type WinRuntimeId = (typeof WIN_RUNTIME_IDS)[number];
+export type HostRuntimeId = LinuxRuntimeId | WinRuntimeId;
+export type RuntimeId = "llamacpp" | "mlx" | HostRuntimeId;
 
 export interface LinuxRuntimeInstallStatus {
   id: LinuxRuntimeId;
+  installed: boolean;
+  path: string | null;
+  tag: string | null;
+  backend: InferenceBackend;
+}
+
+export interface WinRuntimeInstallStatus {
+  id: WinRuntimeId;
   installed: boolean;
   path: string | null;
   tag: string | null;
@@ -429,10 +440,10 @@ export interface PlatformCapabilities {
   mlxPython?: string | null;
   /** Installed CUDA pack id (linux-cuda). macOS Metal is not a pack. */
   nativeBackendPack?: string | null;
-  /** Linux downloadable SKUs (AppImage / native pack). */
-  nativeRuntimes?: LinuxRuntimeInstallStatus[];
-  /** Suggested Linux SKU from GPU compute cap / vendor. */
-  nativeRecommendedId?: LinuxRuntimeId | null;
+  /** Host downloadable SKUs (Linux AppImage / Windows NSIS). */
+  nativeRuntimes?: Array<LinuxRuntimeInstallStatus | WinRuntimeInstallStatus>;
+  /** Suggested host SKU from GPU compute cap / vendor. */
+  nativeRecommendedId?: HostRuntimeId | null;
   /** nvidia-smi compute caps (70 = 7.0). Empty when no NVIDIA GPU. */
   computeCaps?: number[];
   /** Default for new servers (REVOLVER_RUNTIME or pack:native extraMetadata). */
@@ -582,6 +593,7 @@ export interface RuntimeCatalog {
   llamacpp: RuntimeCatalogEntry;
   mlx: RuntimeCatalogEntry;
   linux: RuntimeCatalogEntry[];
+  win: RuntimeCatalogEntry[];
 }
 
 export interface RuntimeStatus {
@@ -597,7 +609,9 @@ export interface RuntimeStatus {
     runtimePath: string | null;
   };
   linux: LinuxRuntimeInstallStatus[];
+  win: WinRuntimeInstallStatus[];
   recommendedLinuxId: LinuxRuntimeId | null;
+  recommendedWinId: WinRuntimeId | null;
   platform: NodeJS.Platform;
 }
 

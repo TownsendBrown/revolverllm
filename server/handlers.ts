@@ -283,7 +283,8 @@ export const handlers = {
     const mlx = probeMlxRuntime();
     const compose = inComposeBackend();
     const rt = getRuntimesStatus();
-    const computeCaps = process.platform === "linux" ? detectComputeCaps() : [];
+    const computeCaps =
+      process.platform === "linux" || process.platform === "win32" ? detectComputeCaps() : [];
     return {
       host: compose ? ("compose" as const) : ("electron" as const),
       pathSettingsLocked: compose,
@@ -295,8 +296,9 @@ export const handlers = {
       nativeError: native.error,
       llamaServerBin: native.bin,
       nativeBackendPack: native.packId ?? null,
-      nativeRuntimes: rt.linux,
-      nativeRecommendedId: rt.recommendedLinuxId,
+      nativeRuntimes: process.platform === "win32" ? rt.win : rt.linux,
+      nativeRecommendedId:
+        process.platform === "win32" ? rt.recommendedWinId : rt.recommendedLinuxId,
       computeCaps,
       mlx: mlx.available,
       mlxError: mlx.error,

@@ -28,8 +28,12 @@ import {
   validateBackendDevices,
   vendorLabel,
 } from "../../shared/gpuDevices";
-import { formatRuntimeIdLabel, linuxRuntimeBackend, nativeSkuBlock } from "../../shared/nativeRuntimeMatch";
-import type { LinuxRuntimeId, LinuxRuntimeInstallStatus } from "../../shared/types";
+import {
+  formatRuntimeIdLabel,
+  hostRuntimeBackend,
+  nativeSkuBlock,
+} from "../../shared/nativeRuntimeMatch";
+import type { HostRuntimeId, LinuxRuntimeInstallStatus, WinRuntimeInstallStatus } from "../../shared/types";
 
 type Props = {
   models: CatalogModel[];
@@ -215,8 +219,10 @@ export default function ServerPanel({
   const [mlxError, setMlxError] = useState<string | undefined>();
   const [hostOs, setHostOs] = useState<string>("other");
   const [defaultRuntime, setDefaultRuntime] = useState<ServerRuntimeMode>("docker");
-  const [nativeRuntimes, setNativeRuntimes] = useState<LinuxRuntimeInstallStatus[]>([]);
-  const [nativeRecommendedId, setNativeRecommendedId] = useState<LinuxRuntimeId | null>(null);
+  const [nativeRuntimes, setNativeRuntimes] = useState<
+    Array<LinuxRuntimeInstallStatus | WinRuntimeInstallStatus>
+  >([]);
+  const [nativeRecommendedId, setNativeRecommendedId] = useState<HostRuntimeId | null>(null);
   const [computeCaps, setComputeCaps] = useState<number[]>([]);
   const [gpuDevices, setGpuDevices] = useState<number[]>([]);
   const [gpuMode, setGpuMode] = useState<GpuMode>("single");
@@ -241,7 +247,7 @@ export default function ServerPanel({
   // On macOS the native supervisor spawns llama-server / MLX with Metal
   // directly, so Metal is available with or without the host agent.
   const metalHost = macMetal || hostOs === "darwin";
-  const nativeOnly = defaultRuntime === "native" && hostOs === "linux";
+  const nativeOnly = defaultRuntime === "native" && (hostOs === "linux" || hostOs === "win32");
   const installedLinuxIds = useMemo(
     () => nativeRuntimes.filter((s) => s.installed).map((s) => s.id),
     [nativeRuntimes],
@@ -275,7 +281,7 @@ export default function ServerPanel({
   }, [backend, gpu, nativeOnly, installedLinuxIds, computeCaps]);
 
   const recBackend = useMemo(() => {
-    if (nativeOnly && nativeRecommendedId) return linuxRuntimeBackend(nativeRecommendedId);
+    if (nativeOnly && nativeRecommendedId) return hostRuntimeBackend(nativeRecommendedId);
     return recommendedWizardBackend(metalHost, dockerGpu, gpu);
   }, [nativeOnly, nativeRecommendedId, metalHost, dockerGpu, gpu]);
 
@@ -337,7 +343,7 @@ export default function ServerPanel({
     if (!err) return;
     const rec =
       nativeOnly && nativeRecommendedId
-        ? linuxRuntimeBackend(nativeRecommendedId)
+        ? hostRuntimeBackend(nativeRecommendedId)
         : recommendedWizardBackend(metalHost, dockerGpu, gpu);
     if (rec === backend) return;
     const recErr = nativeOnly
@@ -493,7 +499,7 @@ export default function ServerPanel({
   const openRuntimes = () => onOpenRuntimes?.();
 
   const installRecommended = async () => {
-    const id = nativeRecommendedId ?? "linux-cpu";
+    const id = nativeRecommendedId ?? (hostOs === "win32" ? "win-cpu" : "linux-cpu");
     try {
       await api.installRuntime(id);
     } catch (e) {

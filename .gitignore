@@ -5,9 +5,11 @@ dist-electron/
 release/
 release-native/
 release-mac/
+release-win/
 build/mlx-runtime/
 build/mlx-runtime-build/
 build/*.tar.gz
+build/*.zip
 build/*.log
 /main.js
 data/

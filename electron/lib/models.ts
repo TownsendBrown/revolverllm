@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "fs";
-import { dirname, join, relative, resolve } from "path";
+import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { load as yamlLoad } from "js-yaml";
 import { readGgufMetadataCached } from "./ggufMetadata";
 import { metaGet, metaNumber, metaString } from "./ggufMeta";
@@ -439,7 +439,7 @@ export function resolveModelRef(modelIdOrPath: string): ModelRef {
     return { id: path, format: "gguf", source: "local", path };
   }
 
-  if (modelIdOrPath.startsWith("/")) {
+  if (isAbsolute(modelIdOrPath)) {
     const classified = classifyLocalModelPath(normalizeModelPath(toFsPath(modelIdOrPath)));
     if (classified) {
       return { id: classified.id, format: classified.format, source: "local", path: classified.path };
@@ -494,7 +494,7 @@ export function resolveModelPath(modelIdOrPath: string): ResolvedModel {
     };
   }
 
-  if (modelIdOrPath.startsWith("/")) {
+  if (isAbsolute(modelIdOrPath)) {
     const classified = classifyLocalModelPath(normalizeModelPath(toFsPath(modelIdOrPath)));
     if (classified) {
       const hf = scanLocalHfModels().find((m) => m.path === classified.path);

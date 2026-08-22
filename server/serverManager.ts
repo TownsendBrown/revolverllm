@@ -168,9 +168,12 @@ export const serverManager = {
       } else {
         const probe = probeNativeRuntime(undefined, { backend: req.backend });
         if (!probe.available) throw new Error(probe.error ?? "Native llama-server is not available");
-        if (process.platform === "linux") {
+        if (process.platform === "linux" || process.platform === "win32") {
           const rt = getRuntimesStatus();
-          const installed = rt.linux.filter((s) => s.installed).map((s) => s.id);
+          const installed =
+            process.platform === "win32"
+              ? rt.win.filter((s) => s.installed).map((s) => s.id)
+              : rt.linux.filter((s) => s.installed).map((s) => s.id);
           const gpu = await getGpuInfoAsync();
           const err = nativeSkuBlock(req.backend, {
             installed,

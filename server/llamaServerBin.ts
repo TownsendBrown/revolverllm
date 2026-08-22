@@ -4,7 +4,13 @@ import { homedir } from "os";
 import { inComposeBackend } from "../shared/runtimeMode";
 import type { InferenceBackend } from "../shared/types";
 import { resolveInstalledBackendPack, type NativeBackendResolve } from "./nativeBackends";
-import { installedLlamaServerBin, listInstalledLinuxRuntimes, resolveLinuxLlamaServer } from "./runtimeInstaller";
+import {
+  installedLlamaServerBin,
+  listInstalledLinuxRuntimes,
+  listInstalledWinRuntimes,
+  resolveLinuxLlamaServer,
+  resolveWinLlamaServer,
+} from "./runtimeInstaller";
 
 export interface LlamaServerResolve {
   bin: string | null;
@@ -14,6 +20,8 @@ export interface LlamaServerResolve {
 }
 
 function isExecutable(path: string): boolean {
+  if (!existsSync(path)) return false;
+  if (process.platform === "win32") return true;
   try {
     accessSync(path, constants.X_OK);
     return true;
@@ -53,7 +61,9 @@ function lmStudioServerBins(home: string): string[] {
     try {
       for (const name of readdirSync(root)) {
         const bin = join(root, name, "llama-server");
+        const exe = join(root, name, "llama-server.exe");
         if (existsSync(bin)) found.push(bin);
+        else if (existsSync(exe)) found.push(exe);
       }
     } catch {
       /* ignore */
@@ -82,7 +92,11 @@ function missingBinError(): string {
   if (process.platform === "darwin") {
     return "llama.cpp runtime not installed — install it from Setup runtimes (downloads the Metal build from GitHub releases).";
   }
-  if (listInstalledLinuxRuntimes().length === 0) {
+  const none =
+    process.platform === "win32"
+      ? listInstalledWinRuntimes().length === 0
+      : listInstalledLinuxRuntimes().length === 0;
+  if (none) {
     return "llama.cpp runtime not installed — install one from Config → Manage runtimes.";
   }
   return "llama-server not found. Install a matching runtime in Config → Manage runtimes, or set LLAMA_SERVER_BIN.";
@@ -111,6 +125,15 @@ export function resolveLlamaServerBin(
       return { bin: linux.bin, libDir: linux.libDir, packId: linux.id };
     }
   }
+  if (platform === "win32" && !opts?.skipPacks) {
+    const win = resolveWinLlamaServer({
+      backend: opts?.backend,
+      computeCaps: opts?.computeCaps,
+    });
+    if (win) {
+      return { bin: win.bin, libDir: win.libDir, packId: win.id };
+    }
+  }
   if (platform !== "darwin" && !opts?.skipPacks) {
     const pack = opts?.pack !== undefined ? opts.pack : resolveInstalledBackendPack({ platform });
     if (pack) {
@@ -122,7 +145,11 @@ export function resolveLlamaServerBin(
   const staged = platform === "darwin" ? installedLlamaServerBin() : null;
   const candidates = [
     ...(staged ? [staged] : []),
-    ...pathDirs().flatMap((dir) => [join(dir, "llama-server"), join(dir, "llama-server-cuda")]),
+    ...pathDirs().flatMap((dir) => [
+      join(dir, "llama-server"),
+      join(dir, "llama-server.exe"),
+      join(dir, "llama-server-cuda"),
+    ]),
     "/usr/local/bin/llama-server",
     "/opt/homebrew/bin/llama-server",
     "/usr/bin/llama-server",

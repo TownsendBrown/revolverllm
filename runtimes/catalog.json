@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "llamacpp": {
     "repo": "ggml-org/llama.cpp",
     "tag": "b10453",
@@ -54,6 +54,44 @@
       "sizeBytes": 16645691,
       "unpackDir": "llama-b10453",
       "binary": "llama-server"
+    }
+  },
+  "win": {
+    "win-cuda": {
+      "label": "CUDA llama.cpp",
+      "backend": "cuda",
+      "tag": "b10453",
+      "asset": "win-cuda-b10453.zip",
+      "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/win-cuda-b10453.zip",
+      "sha256": "c5908cdfbcd70ca2129801f3fa3aa0a9cb22939c27e4ba870ef907e837bcc4b9",
+      "sizeBytes": 653131831,
+      "unpackDir": ".",
+      "binary": "llama-server.exe",
+      "libDir": "."
+    },
+    "win-vulkan": {
+      "label": "Vulkan llama.cpp",
+      "backend": "vulkan",
+      "tag": "b10453",
+      "asset": "llama-b10453-bin-win-vulkan-x64.zip",
+      "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/llama-b10453-bin-win-vulkan-x64.zip",
+      "sha256": "123001c3e3918f29420f622431b06dfc5e09ef4d6aff366860d3fd5b9f3418d8",
+      "sizeBytes": 34807257,
+      "unpackDir": ".",
+      "binary": "llama-server.exe",
+      "libDir": "."
+    },
+    "win-cpu": {
+      "label": "CPU llama.cpp",
+      "backend": "cpu",
+      "tag": "b10453",
+      "asset": "llama-b10453-bin-win-cpu-x64.zip",
+      "url": "https://github.com/TownsendBrown/revolverllm/releases/download/runtimes-v1/llama-b10453-bin-win-cpu-x64.zip",
+      "sha256": "70c07211d0027305f0be09cd755d79641ebb0bb646590ff3d498c66b22df29b0",
+      "sizeBytes": 18464078,
+      "unpackDir": ".",
+      "binary": "llama-server.exe",
+      "libDir": "."
     }
   }
 }

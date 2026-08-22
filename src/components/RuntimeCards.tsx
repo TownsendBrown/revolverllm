@@ -165,3 +165,17 @@ export function linuxRuntimeCards(status: RuntimeStatus): RuntimeCardModel[] {
     };
   });
 }
+
+export function winRuntimeCards(status: RuntimeStatus): RuntimeCardModel[] {
+  const rec = status.recommendedWinId;
+  return (status.catalog.win ?? []).map((entry) => {
+    const inst = status.win.find((s) => s.id === entry.id);
+    return {
+      id: entry.id,
+      label: entry.label,
+      detail: `${formatRuntimeMb(entry.sizeBytes)} · tag ${entry.tag ?? "—"} · ${entry.backend ?? ""}`,
+      installed: Boolean(inst?.installed),
+      recommended: rec === entry.id,
+    };
+  });
+}
